@@ -1,0 +1,26 @@
+[Unit]
+Description=Yuyu learning companion
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/yuyu/current
+Environment=PORT=3731
+Environment=YUYU_COOKIE_PATH=/yuyu/
+EnvironmentFile=/etc/yuyu/model.env
+ExecStart=/opt/yuyu/runtime/node /opt/yuyu/current/server.mjs
+DynamicUser=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+StateDirectory=yuyu
+StateDirectoryMode=0700
+Restart=on-failure
+RestartSec=2
+MemoryMax=256M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

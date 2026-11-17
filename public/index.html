@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#f7f8ef">
+  <meta name="description" content="鱼渔陪你读懂题目，自己找到下一步。">
+  <title>鱼渔 · 一小步，也很棒</title>
+  <link rel="icon" href="fish-icon.png">
+  <link rel="stylesheet" href="style.css?v=11">
+  <script type="module" src="app.js?v=11"></script>
+</head>
+<body>
+  <header class="top"><div class="wrap top-inner">
+    <button class="brand" type="button" data-view="study"><span class="brand-mark" aria-hidden="true">🐠</span>鱼渔</button>
+    <nav class="nav" aria-label="鱼渔导航">
+      <button type="button" data-tab data-view="study" aria-current="page"><span aria-hidden="true">✎</span> 解题</button>
+      <button type="button" data-tab data-view="history"><span aria-hidden="true">▤</span> 题目本</button>
+      <button type="button" data-tab data-view="reef"><span aria-hidden="true">✦</span> 贝壳岛</button>
+    </nav>
+    <div class="account-tools">
+      <button class="shells" type="button" data-view="reef" aria-label="贝壳岛"><span aria-hidden="true">🐚</span><span id="shell-count">0</span><span class="shell-unit">枚贝壳</span></button>
+      <button class="family-link" id="family-open" type="button"><span aria-hidden="true">⌂</span> <span id="family-nav-text">家庭账号</span></button>
+    </div>
+  </div></header>
+  <main class="wrap" id="main">
+    <section class="continue-card" id="continue-card" aria-labelledby="continue-title" hidden>
+      <div class="continue-icon" aria-hidden="true">↗</div>
+      <div class="continue-copy"><h2 id="continue-title">继续上次的题</h2><p id="continue-problem"></p></div>
+      <button class="button primary" id="continue-button" type="button">接着做 →</button>
+    </section>
+
+    <section class="hero" id="hero" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow"><span aria-hidden="true">✦</span> 你的解题小伙伴</p>
+        <h1 id="hero-title">卡住了？<br><em>我们一起想。</em></h1>
+        <p class="intro">拍题、说题都可以。<br>鱼渔陪你做下一小步。</p>
+      </div>
+      <div class="hero-art" role="img" aria-label="戴着围巾、拿着放大镜的黄色小鱼"></div>
+    </section>
+
+    <section class="card" id="start" aria-labelledby="start-title">
+      <div class="card-title"><span class="tile peach" aria-hidden="true">✎</span><div><h2 id="start-title" tabindex="-1">带一道题来</h2><p>拍一拍、说一说，也可以打字。</p></div></div>
+      <form id="problem-form">
+        <label class="sr" for="problem">把题目打在这里</label>
+        <textarea id="problem" rows="3" maxlength="2400" placeholder="把题目写在这里…"></textarea>
+        <div class="photo-preview" id="photo-preview" hidden><img id="photo-thumb" alt="待发送的题目照片"><span>已添加题目照片</span><button id="remove-photo" type="button" class="quiet">移除</button></div>
+        <div class="actions start-actions">
+          <div class="photo-actions">
+            <input id="camera" type="file" accept="image/*" capture="environment" class="sr file-input">
+            <label class="button secondary" for="camera"><span aria-hidden="true">▣</span> 拍照</label>
+            <input id="photo" type="file" accept="image/*" class="sr file-input">
+            <label class="button secondary" for="photo">选照片</label>
+            <button id="speak-problem" type="button" class="button secondary mic-button" aria-pressed="false"><span aria-hidden="true">🎙</span> 说题</button>
+          </div>
+          <button id="start-button" class="button primary" type="submit">和鱼渔想一想 →</button>
+        </div>
+        <p class="small privacy">拍照或录音时，记得避开姓名和学校。</p>
+      </form>
+      <div class="practice">
+        <span>先试一道</span>
+        <button type="button" data-example="worksheet-02">10 颗珠拨十位数</button>
+        <button type="button" data-example="worksheet-05">6 颗珠拨整万数</button>
+        <button type="button" data-example="worksheet-21">排数字比乘积</button>
+      </div>
+    </section>
+
+    <section class="card lesson" id="lesson" aria-labelledby="lesson-title" hidden>
+      <div class="lesson-top"><div class="card-title"><span class="tile mint" aria-hidden="true">🐠</span><div><h2 id="lesson-title" tabindex="-1">一起解题</h2><p id="lesson-subtitle"></p></div></div><div class="lesson-actions"><button id="review-challenge" type="button" class="button secondary" hidden>挑战相似题</button><button id="new-problem" type="button" class="quiet">换一道题</button></div></div>
+      <div class="lesson-grid">
+        <div class="question-rail">
+          <ol class="stages" aria-label="解题进度"><li data-stage="0">读懂题</li><li data-stage="1">找办法</li><li data-stage="2">算一算</li></ol>
+          <div class="problem-card"><div class="row-heading"><strong>这道题</strong><button type="button" class="listen" id="listen-problem">🔊 听题目</button></div><p id="problem-view"></p></div>
+        </div>
+        <div class="lesson-work">
+          <div id="current-step" class="current-step" aria-live="polite" aria-atomic="true">
+            <div class="row-heading"><strong id="step-title">现在做这一步</strong><button type="button" class="listen" id="listen-step">🔊 听提示</button></div>
+            <p id="step-note"></p>
+            <p id="step-task"></p>
+          </div>
+          <div id="last-answer" class="last-answer" hidden><strong>我刚才写的</strong><p id="last-answer-text"></p></div>
+          <form id="attempt-form" class="composer">
+            <fieldset id="step-choice-group" class="step-choice-group" hidden>
+              <legend>点一个选项</legend>
+              <div id="step-choices" class="step-choices"></div>
+            </fieldset>
+            <label class="attempt-label" for="attempt" id="attempt-label">轮到你试试</label>
+            <textarea id="attempt" rows="2" maxlength="1000" placeholder="写下你想到的一小步…"></textarea>
+            <div class="actions composer-actions">
+              <button id="speak-attempt" type="button" class="button secondary mic-button" aria-pressed="false"><span aria-hidden="true">🎙</span> 说一说</button>
+              <button id="more-hint" class="button secondary" type="button" aria-controls="current-step">提示我一下</button>
+              <button id="send-attempt" class="button primary" type="submit">检查这一步 →</button>
+            </div>
+          </form>
+          <div id="resume-expired" class="notice" hidden><p>这道题的进度已过期，之前的步骤还在下面。</p><button id="restart-problem" type="button" class="button secondary">重新开始这道题</button></div>
+          <div id="lesson-status"></div>
+          <details id="conversation" class="conversation" hidden>
+            <summary id="conversation-title">我的解题记录</summary>
+            <div id="messages" class="messages"></div>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <section id="completion" class="completion" aria-labelledby="completion-title" hidden>
+      <div class="completion-art" aria-hidden="true"><img src="mascot.webp" width="1020" height="680" alt=""></div>
+      <h2 id="completion-title" tabindex="-1">这道题做完啦！</h2>
+      <p class="completion-encouragement" id="completion-encouragement">你一步一步把题解开了。</p>
+      <div class="completion-reward" id="completion-reward" hidden><span aria-hidden="true">🐚</span> <span id="completion-reward-text"></span></div>
+      <p class="completion-unlock" id="completion-unlock" hidden></p>
+      <div class="completion-actions">
+        <button id="start-challenge" type="button" class="button primary" hidden>挑战相似题 →</button>
+        <button id="next-problem" type="button" class="button primary">再来一题 →</button>
+        <button id="review-solution" type="button" class="quiet">回看解法</button>
+      </div>
+      <div id="completion-status"></div>
+    </section>
+
+    <section class="card history-page" id="history" aria-labelledby="history-title" hidden>
+      <div class="card-title"><span class="tile mint" aria-hidden="true">▤</span><div><h2 id="history-title" tabindex="-1">我的题目本</h2><p>接着想上次的题，也可以回看自己怎么解出来的。</p></div></div>
+      <div class="history-tools">
+        <label class="sr" for="history-search">搜题目</label>
+        <input id="history-search" type="search" placeholder="搜一搜题目里的词">
+        <div class="history-filters" role="group" aria-label="按状态筛选">
+          <button type="button" class="button secondary" data-filter="all" aria-pressed="true">全部</button>
+          <button type="button" class="button secondary" data-filter="open" aria-pressed="false">还在想</button>
+          <button type="button" class="button secondary" data-filter="done" aria-pressed="false">已解开</button>
+        </div>
+      </div>
+      <div id="history-status"></div>
+      <div id="history-list" class="history-list"></div>
+      <p id="history-empty" class="empty-state" hidden></p>
+      <p class="small privacy" id="history-storage">登录家庭账号，换设备也能接着做。</p>
+    </section>
+
+    <section id="reef" aria-labelledby="reef-title" hidden>
+      <div class="reef-banner">
+        <div><h2 id="reef-title" tabindex="-1">我的贝壳岛</h2><p>解开一道题，收一枚贝壳。<br>攒贝壳，遇见海洋伙伴。</p></div>
+        <div class="reef-art" aria-hidden="true"><span>✧</span>🐚<span>✦</span></div>
+      </div>
+      <div class="card reef-details">
+        <div class="row-heading"><h3>海洋伙伴图鉴</h3><span id="reef-count" class="shells"></span></div>
+        <p id="reef-progress-label"></p>
+        <progress id="reef-progress" aria-labelledby="reef-progress-label"></progress>
+        <div id="stickers" class="stickers"></div>
+      </div>
+    </section>
+    <div id="status" class="status" role="status" aria-live="polite"></div>
+    <footer><span>🐚 一小步，也很棒</span><button type="button" class="quiet" id="about-button">给家长的话</button></footer>
+  </main>
+  <dialog id="family-dialog" aria-labelledby="family-title">
+    <div class="row-heading"><h2 id="family-title">家庭账号</h2><form method="dialog"><button class="quiet" aria-label="关闭家庭账号">关闭</button></form></div>
+    <p id="family-description">在手机和 iPad 登录同一个账号，题目、进度和贝壳就能一起带过去。</p>
+    <div id="family-auth">
+      <div class="family-choices" role="group" aria-label="家庭账号操作">
+        <button id="family-login" type="button" class="button secondary" aria-pressed="true">登录</button>
+        <button id="family-create" type="button" class="button secondary" aria-pressed="false">创建账号</button>
+      </div>
+      <form id="family-form">
+        <label for="family-name">家庭账号名</label>
+        <input id="family-name" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required minlength="4" maxlength="24" pattern="[A-Za-z0-9][A-Za-z0-9_\-]{3,23}">
+        <p class="small">4–24 个英文字母、数字、下划线或短横线，以字母或数字开头。</p>
+        <label for="family-password">密码</label>
+        <input id="family-password" name="password" type="password" autocomplete="current-password" required minlength="8" maxlength="64">
+        <p class="small">至少 8 个字符，请由家长记好。</p>
+        <button id="family-submit" class="button primary" type="submit">登录</button>
+      </form>
+    </div>
+    <div id="family-signed-in" hidden>
+      <p id="family-signed-name" class="signed-name"></p>
+      <p id="family-sync-status" aria-live="polite"></p>
+      <div id="family-import-area" class="notice" hidden><p>这台设备还有未同步的题目或贝壳。</p><button type="button" id="family-import" class="button secondary">把这台设备的记录加入账号</button></div>
+      <div class="dialog-actions"><button type="button" id="family-refresh" class="button secondary">同步一下</button><button type="button" id="family-logout" class="quiet">退出账号</button></div>
+    </div>
+    <p id="family-error" role="status" class="status"></p>
+  </dialog>
+  <dialog id="about"><form method="dialog"><h2>给家长的话</h2><p>鱼渔用小任务带孩子解题，可以填数字、打字或说一句话。AI 可能读错题或误判，请和孩子一起核对。</p><p>访客的记录存在当前浏览器。登录后，题目、回答、进度和贝壳会保存在家庭账号里。题目、照片、尝试和录音会发给百炼千问生成反馈。</p><div class="dialog-actions"><button id="clear-history" type="button" class="quiet">清空题目本</button><button class="button primary">知道啦</button></div></form></dialog>
+  <dialog id="delete-history"><form method="dialog"><h2 id="delete-title">删除这道题？</h2><p id="delete-copy"></p><div class="dialog-actions"><button value="cancel" class="button secondary" autofocus>先留着</button><button value="delete" class="button primary">删除记录</button></div></form></dialog>
+</body>
+</html>
