@@ -134,11 +134,16 @@ function text(value, length) {
   return typeof value === 'string' ? value.trim().slice(0, length) : '';
 }
 
+const numbersIn = (value) => value.normalize('NFKC').match(/\d+(?:\.\d+)?/g) || [];
+
+function allowedHintNumbers(problem, verified) {
+  if (!numbersIn(problem).length) return null;
+  return [...new Set(['0', '1', '2', '4', '5', '10', '100', '1000', '10000', ...numbersIn([problem, ...verified].join(' '))])];
+}
+
 function usesGivenNumbers(problem, message, verified) {
-  const numbers = (value) => value.normalize('NFKC').match(/\d+(?:\.\d+)?/g) || [];
-  if (!numbers(problem).length) return true;
-  const known = new Set(['0', '1', '2', '4', '5', '10', '100', '1000', '10000', ...numbers([problem, ...verified].join(' '))]);
-  return numbers(message).every((number) => known.has(number));
+  const allowed = allowedHintNumbers(problem, verified);
+  return !allowed || numbersIn(message).every((number) => allowed.includes(number));
 }
 
 function stepFrom(reply) {
@@ -277,9 +282,9 @@ async function contextualHint(req, state, step, previousHints, level) {
       previousWork: [...state.turns.filter((turn) => turn.attempt).map(({ attempt, partial }) => ({ attempt, partial })),
         ...(state.guide?.accepted || []).map((attempt) => ({ attempt, partial: true }))],
     };
-    const result = await ask(hintWriter, JSON.stringify(context), 200, 0.15, 'qwen-plus', 4_500);
-    const note = typeof result.note === 'string' ? result.note.trim() : '';
     const known = context.previousWork.filter((turn) => turn.partial).map((turn) => turn.attempt);
+    const result = await ask(hintWriter, JSON.stringify({ ...context, allowedNumbers: allowedHintNumbers(state.problem, known) }), 200, 0.15, 'qwen-plus', 4_500);
+    const note = typeof result.note === 'string' ? result.note.trim() : '';
     const normalized = stepId(note);
     if (!normalized || note.length > 112 || /[?？]/.test(note) || tooAdvanced.test(note) ||
         context.previousHints.some((hint) => stepId(hint) === normalized) || stepId(step.task) === normalized ||
@@ -362,15 +367,17 @@ async function coach(req, action, body, challenge) {
     budget(req);
     active++;
     const lastTask = state.turns.at(-1)?.task;
+    const priorAttempts = state.turns.filter((turn) => turn.partial).map((turn) => turn.attempt);
     const data = {
       action, problem: state.problem, lastTask, turns: state.turns, attempt, stage,
       audience, teachingIdea: state.method || teachingGuide(state.problem),
+      allowedNumbers: allowedHintNumbers(state.problem, priorAttempts),
     };
     try {
       const started = Date.now();
       const reviewContext = {
         action, problem: state.problem, lastTask, attempt,
-        priorAttempts: state.turns.filter((turn) => turn.partial).map((turn) => turn.attempt),
+        priorAttempts,
       };
       const [firstReply, grade] = await Promise.all([
         ask(writer, JSON.stringify(data), 300, 0.15),
@@ -388,18 +395,22 @@ async function coach(req, action, body, challenge) {
         ...reviewContext, partial, wrong, teachingIdea: data.teachingIdea, reply: hint,
       }), 160, 0.05, 'qwen-plus') : {};
       let check = solved ? {} : await audit(candidate);
-      const verified = [...reviewContext.priorAttempts];
+      const verified = [...priorAttempts];
       if (partial) verified.push(attempt);
-      const usable = () => check.ok === true && candidate &&
-        usesGivenNumbers(state.problem, (candidate.note || '') + ' ' + candidate.task, verified) &&
+      const fitsNumbers = () => candidate && usesGivenNumbers(state.problem, (candidate.note || '') + ' ' + candidate.task, verified);
+      const usable = () => check.ok === true && fitsNumbers() &&
         (wrong ? stepId(lastTask) === stepId(candidate.task)
           : !state.turns.some((turn) => stepId(turn.task) === stepId(candidate.task)));
       if (!solved && !usable() && Date.now() - started < 13_000) {
+        const correction = text(check.reason, 120) || (wrong
+          ? '保持同一个任务，只在 note 里指出一个具体的检查办法。'
+          : '缩短句子，换一个简单具体的小动作。别重复刚做过的任务。');
         const repair = {
           ...data,
-          correction: text(check.reason, 120) || (wrong
-            ? '保持同一个任务，只在 note 里指出一个具体的检查办法。'
-            : '缩短句子，换一个简单具体的小动作。别重复刚做过的任务。'),
+          allowedNumbers: allowedHintNumbers(state.problem, verified),
+          correction: candidate && !fitsNumbers()
+            ? '上一条回复用了未经核对的新数字。只用 allowedNumbers 中的数字，或用数位名称和空格。' + correction
+            : correction,
           acknowledgedStep: partial,
         };
         try {
