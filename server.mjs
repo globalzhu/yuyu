@@ -141,9 +141,12 @@ function allowedHintNumbers(problem, verified) {
   return [...new Set(['0', '1', '2', '4', '5', '10', '100', '1000', '10000', ...numbersIn([problem, ...verified].join(' '))])];
 }
 
+function unapprovedHintNumbers(message, allowedNumbers) {
+  return allowedNumbers ? [...new Set(numbersIn(message).filter((number) => !allowedNumbers.includes(number)))] : [];
+}
+
 function usesGivenNumbers(problem, message, verified) {
-  const allowed = allowedHintNumbers(problem, verified);
-  return !allowed || numbersIn(message).every((number) => allowed.includes(number));
+  return unapprovedHintNumbers(message, allowedHintNumbers(problem, verified)).length === 0;
 }
 
 function stepFrom(reply) {
@@ -397,19 +400,22 @@ async function coach(req, action, body, challenge) {
       let check = solved ? {} : await audit(candidate);
       const verified = [...priorAttempts];
       if (partial) verified.push(attempt);
-      const fitsNumbers = () => candidate && usesGivenNumbers(state.problem, (candidate.note || '') + ' ' + candidate.task, verified);
-      const usable = () => check.ok === true && fitsNumbers() &&
+      const allowedNumbers = allowedHintNumbers(state.problem, verified);
+      const unapproved = () => candidate ? unapprovedHintNumbers(`${candidate.note} ${candidate.task}`, allowedNumbers) : [];
+      const usable = () => check.ok === true && candidate && !unapproved().length &&
         (wrong ? stepId(lastTask) === stepId(candidate.task)
           : !state.turns.some((turn) => stepId(turn.task) === stepId(candidate.task)));
       if (!solved && !usable() && Date.now() - started < 13_000) {
+        const rejectedNumbers = unapproved();
         const correction = text(check.reason, 120) || (wrong
           ? '保持同一个任务，只在 note 里指出一个具体的检查办法。'
           : '缩短句子，换一个简单具体的小动作。别重复刚做过的任务。');
         const repair = {
           ...data,
-          allowedNumbers: allowedHintNumbers(state.problem, verified),
-          correction: candidate && !fitsNumbers()
-            ? '上一条回复用了未经核对的新数字。只用 allowedNumbers 中的数字，或用数位名称和空格。' + correction
+          allowedNumbers,
+          previousReply: candidate,
+          correction: rejectedNumbers.length
+            ? `上一条回复用了未经核对的新数字：${rejectedNumbers.join('、')}。保留正确的概念说明，改用数位名称或空格引导，别报出这些数。${correction}`
             : correction,
           acknowledgedStep: partial,
         };
@@ -432,8 +438,10 @@ async function coach(req, action, body, challenge) {
       if (partial) {
         stage = Math.min(2, Math.max(stage, 1));
         if (!step) {
+          const approvedNote = check.ok === true && candidate?.note &&
+            !unapprovedHintNumbers(candidate.note, allowedNumbers).length && candidate.note;
           step = {
-            note: '这一小步做对了，可以把它留着用。',
+            note: approvedNote || '这一小步做对了，可以把它留着用。',
             task: '把刚得到的线索和题目还要找的内容连起来，写出接下来要做的事。',
             format: 'phrase',
           };
