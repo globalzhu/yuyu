@@ -415,12 +415,12 @@ async function coach(req, action, body, challenge) {
           allowedNumbers,
           previousReply: candidate,
           correction: rejectedNumbers.length
-            ? `上一条回复用了未经核对的新数字：${rejectedNumbers.join('、')}。保留正确的概念说明，改用数位名称或空格引导，别报出这些数。${correction}`
+            ? `上一条回复用了未经核对的新数字：${rejectedNumbers.join('、')}。保留解释概念的一句，去掉数值举例。task 只写一个动作，用数位或物品的名称，不写数字，也不代算。${correction}`
             : correction,
           acknowledgedStep: partial,
         };
         try {
-          reply = await ask(writer, JSON.stringify(repair), 265, 0.25);
+          reply = await ask(writer, JSON.stringify(repair), 265, 0.25, rejectedNumbers.length ? 'qwen-plus' : model);
           candidate = stepFrom(reply);
           check = await audit(candidate);
         } catch (error) {
@@ -439,7 +439,8 @@ async function coach(req, action, body, challenge) {
         stage = Math.min(2, Math.max(stage, 1));
         if (!step) {
           const approvedNote = check.ok === true && candidate?.note &&
-            !unapprovedHintNumbers(candidate.note, allowedNumbers).length && candidate.note;
+            [candidate.note, /^[^。！？]+[。！？]/u.exec(candidate.note)?.[0]]
+              .find((note) => note && !unapprovedHintNumbers(note, allowedNumbers).length);
           step = {
             note: approvedNote || '这一小步做对了，可以把它留着用。',
             task: '把刚得到的线索和题目还要找的内容连起来，写出接下来要做的事。',
