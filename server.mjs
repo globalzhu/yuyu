@@ -7,6 +7,7 @@ import { getGuide, guidedCheckForm, guidedHintLadder } from './guides.mjs';
 import { audience, findsGivenNumber, grader, hintReviewer, hintWriter, knownFinalIsCorrect, permitsCompletion, reviewer, rotatingHint, teachingGuide, tooAdvanced, writer } from './tutor.mjs';
 
 const model = process.env.DASHSCOPE_MODEL || 'qwen3-vl-plus';
+const auxiliaryModel = process.env.DASHSCOPE_AUX_MODEL || 'qwen-plus';
 const modelKey = process.env.DASHSCOPE_API_KEY;
 const base = process.env.DASHSCOPE_BASE || 'https://dashscope.aliyuncs.com/compatible-mode/v1';
 const stateKey = modelKey ? createHmac('sha256', modelKey).update('yuyu-study-state-v2').digest() : randomBytes(32);
@@ -247,7 +248,7 @@ async function openChallenge(req, body) {
       try {
         budget(req);
         active++;
-        askChallenge = (prompt, input, tokens, temperature) => ask(prompt, input, tokens, temperature, 'qwen-plus', 7_000);
+        askChallenge = (prompt, input, tokens, temperature) => ask(prompt, input, tokens, temperature, auxiliaryModel, 7_000);
       } catch (error) {
         if (error.status !== 429) throw error;
       }
@@ -286,13 +287,13 @@ async function contextualHint(req, state, step, previousHints, level) {
         ...(state.guide?.accepted || []).map((attempt) => ({ attempt, partial: true }))],
     };
     const known = context.previousWork.filter((turn) => turn.partial).map((turn) => turn.attempt);
-    const result = await ask(hintWriter, JSON.stringify({ ...context, allowedNumbers: allowedHintNumbers(state.problem, known) }), 200, 0.15, 'qwen-plus', 4_500);
+    const result = await ask(hintWriter, JSON.stringify({ ...context, allowedNumbers: allowedHintNumbers(state.problem, known) }), 200, 0.15, auxiliaryModel, 4_500);
     const note = typeof result.note === 'string' ? result.note.trim() : '';
     const normalized = stepId(note);
     if (!normalized || note.length > 112 || /[?？]/.test(note) || tooAdvanced.test(note) ||
         context.previousHints.some((hint) => stepId(hint) === normalized) || stepId(step.task) === normalized ||
         !usesGivenNumbers(state.problem, note, known)) return '';
-    const review = await ask(hintReviewer, JSON.stringify({ ...context, note }), 90, 0.05, 'qwen-plus', 4_500);
+    const review = await ask(hintReviewer, JSON.stringify({ ...context, note }), 90, 0.05, auxiliaryModel, 4_500);
     return review.ok === true ? note : '';
   } catch (error) {
     if (error.status !== 429) console.error('Progressive hint:', error.status || error.name);
@@ -384,7 +385,7 @@ async function coach(req, action, body, challenge) {
       };
       const [firstReply, grade] = await Promise.all([
         ask(writer, JSON.stringify(data), 300, 0.15),
-        action === 'attempt' ? ask(grader, JSON.stringify(reviewContext), 120, 0.05, 'qwen-plus') : {},
+        action === 'attempt' ? ask(grader, JSON.stringify(reviewContext), 120, 0.05, auxiliaryModel) : {},
       ]);
       let reply = firstReply;
       let candidate = stepFrom(reply);
@@ -396,7 +397,7 @@ async function coach(req, action, body, challenge) {
       wrong = action === 'attempt' && !solved && !partial && grade.wrong === true;
       const audit = (hint) => hint ? ask(reviewer, JSON.stringify({
         ...reviewContext, partial, wrong, teachingIdea: data.teachingIdea, reply: hint,
-      }), 160, 0.05, 'qwen-plus') : {};
+      }), 160, 0.05, auxiliaryModel) : {};
       let check = solved ? {} : await audit(candidate);
       const verified = [...priorAttempts];
       if (partial) verified.push(attempt);
@@ -420,7 +421,7 @@ async function coach(req, action, body, challenge) {
           acknowledgedStep: partial,
         };
         try {
-          reply = await ask(writer, JSON.stringify(repair), 265, 0.25, rejectedNumbers.length ? 'qwen-plus' : model);
+          reply = await ask(writer, JSON.stringify(repair), 265, 0.25, rejectedNumbers.length ? auxiliaryModel : model);
           candidate = stepFrom(reply);
           check = await audit(candidate);
         } catch (error) {
