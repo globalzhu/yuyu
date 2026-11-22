@@ -1283,48 +1283,9 @@ dialog p {
   .crop-actions .button { flex: 1; padding: 11px 8px; font-size: 15px; }
   #crop-help { font-size: 14px; }
 }
-#family-dialog .row-heading .quiet {
-  min-height: 44px;
-}
-.family-choices {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin: 18px 0 14px;
-}
-.family-choices [aria-pressed="true"] {
-  background: var(--mint-dark);
-  border-color: var(--mint-dark);
-  color: #fff;
-}
-#family-form > label {
-  display: block;
-  font-weight: 750;
-  margin: 11px 0 4px;
-}
-#family-form > input {
-  width: 100%;
-  min-height: 44px;
-  font-size: 16px;
-  padding: 8px 10px;
-  border: 1px solid #cbded3;
-  border-radius: 10px;
-  background: #f9fbf5;
-  color: var(--ink);
-}
-#family-form .small {
-  font-size: 12px;
-  margin: 4px 0 8px;
-}
 #family-submit {
   width: 100%;
   margin: 10px 0 3px;
-}
-#family-dialog .signed-name {
-  font-weight: 850;
-  font-size: 19px;
-  margin: 10px 0;
-  overflow-wrap: anywhere;
 }
 #family-import-area {
   margin: 10px 0 14px;
@@ -1547,4 +1508,38 @@ dialog p {
   .leaderboard-card { padding: 18px; }
   .leaderboard-labels, .leaderboard-row { grid-template-columns: 35px minmax(0,1fr) 65px; padding: 10px; gap: 7px; }
   .leaderboard-card h3 { font-size: 22px; }
+}
+
+#family-open { display:inline-flex; align-items:center; gap:7px; max-width:min(22vw,230px); min-width:0; }
+#family-open img { width:24px; height:24px; border-radius:50%; }
+#family-nav-text { overflow:hidden; text-overflow:ellipsis; }
+#family-dialog { box-sizing:border-box; width:min(440px,calc(100% - 24px)); max-width:none; max-height:calc(100dvh - 24px); overflow:auto; padding:22px; }
+#family-dialog [hidden] { display:none; }
+#family-dialog h2 { font-size:22px; }
+.account-close { width:44px; height:44px; border:0; border-radius:50%; background:#f1f5ee; color:#345e52; font-size:24px; }
+.account-card { display:flex; align-items:center; gap:14px; background:linear-gradient(115deg,#dcf4e6,#f0f7dc); border:1px solid #cce5d3; border-radius:18px; padding:16px; margin:14px 0 18px; }
+.account-card img { width:64px; height:64px; object-fit:contain; background:#fff9e9; border:3px solid #fff; border-radius:50%; }
+.account-card strong,.account-card small,.account-card span,.account-row small { display:block; }
+.account-card strong { font-size:22px; line-height:1.3; overflow-wrap:anywhere; margin:3px 0; }
+.account-card small { color:#38634f; font-weight:750; }
+.account-card span,.account-row small,.account-form small { font-size:13px; color:#496356; line-height:1.5; }
+.family-choices { display:grid; grid-template-columns:1fr 1fr; margin:18px 0 14px; background:#edf2eb; padding:4px; gap:3px; border-radius:13px; }
+.family-choices button { min-height:42px; background:transparent; color:#395b4b; border:0; border-radius:10px; font-weight:750; }
+.family-choices [aria-pressed="true"] { background:white; color:#116253; box-shadow:0 1px 5px #173a211c; }
+.account-form label { display:block; font-weight:700; margin:12px 0 5px; }
+.account-form input { width:100%; min-height:44px; border:1px solid #bbd2c4; padding:9px 12px; border-radius:10px; background:#fcfdf9; font:inherit; font-size:16px; color:var(--ink); }
+.account-form input:focus { outline:2px solid #25785f; outline-offset:1px; }
+.account-row { display:flex; justify-content:space-between; align-items:center; padding:12px 0; border-bottom:1px solid #dbe6dc; gap:8px; }
+.account-action,.account-text { color:#12644d; min-height:44px; padding:6px 12px; border:0; font:inherit; font-weight:700; }
+.account-action { background:#eaf3ea; border-radius:10px; }
+.account-text { background:transparent; }
+.account-subpanel { margin-top:12px; padding:16px; border-radius:14px; background:#f0f6ec; }
+.account-subpanel h3 { margin:0; }
+.account-subpanel p { margin:6px 0; font-size:14px; }
+#code-value { display:block; overflow-wrap:anywhere; background:white; padding:10px; margin:10px 0; user-select:all; }
+#family-error:empty { display:none; }
+.signout { display:block; margin:12px auto 0; color:#864933; }
+@media(max-width:699px) {
+  #family-open { max-width:35vw; }
+  #family-dialog { padding:18px; }
 }

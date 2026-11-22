@@ -219,7 +219,7 @@ let syncTask = Promise.resolve();
 
 async function familyRequest(action, body) {
   const headers = {};
-  if (family && ['journal', 'sync', 'logout', 'purchase', 'equip'].includes(action)) headers['X-Yuyu-Family-Name'] = family.name;
+  if (family && ['journal', 'sync', 'logout', 'purchase', 'equip', 'password', 'recovery-code'].includes(action)) headers['X-Yuyu-Family-Name'] = family.name;
   if (body !== undefined) Object.assign(headers, { 'Content-Type': 'application/json', 'X-Yuyu-Family': '1' });
   const response = await fetch('api/family/' + action, {
     cache: 'no-store',
@@ -250,7 +250,7 @@ async function setFamily(value) {
 
 const ready = familyRequest('session')
   .then(({ family }) => setFamily(family))
-  .catch(() => {});
+  .catch(() => { syncState = 'unknown'; });
 
 function serialize(task) {
   const next = syncTask.then(task);
@@ -368,7 +368,7 @@ export async function loadJournal({ refresh = true } = {}) {
 
 export async function familyInfo() {
   await ready;
-  if (!family) return { family: null };
+  if (!family) return { family: null, syncState };
   const [local, imported] = await Promise.all([loadLocalJournal(), setting('imported:' + family.name)]);
   return { family, syncState, canImport: !imported && (local.entries.length > 0 || local.earnedShells > 0 || local.wardrobe.owned.length > 0) };
 }
@@ -379,7 +379,33 @@ export async function signIn(mode, credentials) {
     const result = await familyRequest(mode, credentials);
     await setFamily(result.family);
     await pull().catch(() => {});
+    if (syncState === 'expired') {
+      const actual = await familyRequest('session');
+      await setFamily(actual.family);
+      throw new Error('浏览器未能保持这次登录。请允许此网站使用 Cookie，再用账号和密码登录。');
+    }
     return result.family;
+  });
+}
+
+export async function verifyFamilySession() {
+  await ready;
+  return serialize(async () => {
+    const result = await familyRequest('session');
+    const changed = result.family?.name !== family?.name;
+    if (changed) await setFamily(result.family);
+    else if (family) family = result.family;
+    else syncState = 'local';
+    return changed;
+  });
+}
+
+export async function managePassword(action, fields) {
+  await ready;
+  return serialize(async () => {
+    const result = await familyRequest(action, fields);
+    if (action === 'recovery-code' && family) family.hasRecovery = true;
+    return result;
   });
 }
 

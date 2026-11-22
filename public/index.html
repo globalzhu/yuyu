@@ -7,8 +7,8 @@
   <meta name="description" content="鱼渔陪你读懂题目，自己找到下一步。">
   <title>鱼渔 · 一小步，也很棒</title>
   <link rel="icon" href="fish-icon.png">
-  <link rel="stylesheet" href="style.css?v=13">
-  <script type="module" src="app.js?v=13"></script>
+  <link rel="stylesheet" href="style.css?v=14">
+  <script type="module" src="app.js?v=14"></script>
 </head>
 <body>
   <header class="top"><div class="wrap top-inner">
@@ -20,7 +20,7 @@
     </nav>
     <div class="account-tools">
       <button class="shells" type="button" data-view="reef" aria-label="贝壳岛"><span aria-hidden="true">🐚</span><span id="shell-count">0</span><span class="shell-unit">枚贝壳</span></button>
-      <button class="family-link" id="family-open" type="button"><span aria-hidden="true">⌂</span> <span id="family-nav-text">家庭账号</span></button>
+      <button class="family-link" id="family-open" type="button"><img src="fish-icon.png" alt=""><span id="family-nav-text">用户中心</span></button>
     </div>
   </div></header>
   <main class="wrap" id="main">
@@ -172,28 +172,43 @@
     <div class="crop-actions"><button id="crop-whole" type="button" class="button secondary">用整张照片</button><button id="crop-confirm" type="button" class="button primary">用框里的题 →</button></div>
   </dialog>
   <dialog id="family-dialog" aria-labelledby="family-title">
-    <div class="row-heading"><h2 id="family-title">家庭账号</h2><form method="dialog"><button class="quiet" aria-label="关闭家庭账号">关闭</button></form></div>
-    <p id="family-description">在手机和 iPad 登录同一个账号，题目、进度和贝壳就能一起带过去。</p>
-    <div id="family-auth">
-      <div class="family-choices" role="group" aria-label="家庭账号操作">
-        <button id="family-login" type="button" class="button secondary" aria-pressed="true">登录</button>
-        <button id="family-create" type="button" class="button secondary" aria-pressed="false">创建账号</button>
+    <div class="row-heading"><h2 id="family-title">用户中心</h2><form method="dialog"><button class="account-close" aria-label="关闭用户中心">×</button></form></div>
+    <div class="account-card">
+      <img src="avatar-fish.png" alt="" width="72" height="72">
+      <div><small id="account-state">当前身份</small><strong id="family-signed-name">正在确认账号…</strong><span id="family-sync-status" aria-live="polite"></span></div>
+    </div>
+    <div id="family-auth" hidden>
+      <div class="family-choices" role="group" aria-label="选择账号操作">
+        <button id="family-login" type="button" aria-pressed="true">登录</button>
+        <button id="family-create" type="button" aria-pressed="false">注册家庭账号</button>
       </div>
-      <form id="family-form">
+      <form id="family-form" class="account-form">
         <label for="family-name">家庭账号名</label>
         <input id="family-name" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required minlength="4" maxlength="24" pattern="[A-Za-z0-9][A-Za-z0-9_\-]{3,23}">
-        <p class="small">4–24 个英文字母、数字、下划线或短横线，以字母或数字开头。</p>
-        <label for="family-password">密码</label>
+        <small id="name-help" hidden>4–24 个字母、数字、下划线或短横线，以字母或数字开头。</small>
+        <div id="recovery-entry" hidden><label for="reset-code">家长保存的找回码</label><input id="reset-code" autocomplete="off" spellcheck="false" maxlength="64"></div>
+        <label for="family-password" id="password-label">密码</label>
         <input id="family-password" name="password" type="password" autocomplete="current-password" required minlength="8" maxlength="64">
-        <p class="small">至少 8 个字符，请由家长记好。</p>
+        <div id="confirm-entry" hidden><label for="confirm-password">再输入一次密码</label><input id="confirm-password" type="password" autocomplete="new-password" maxlength="64"></div>
         <button id="family-submit" class="button primary" type="submit">登录</button>
       </form>
+      <button id="forgot-password" type="button" class="account-text">忘记密码？</button>
     </div>
     <div id="family-signed-in" hidden>
-      <p id="family-signed-name" class="signed-name"></p>
-      <p id="family-sync-status" aria-live="polite"></p>
-      <div id="family-import-area" class="notice" hidden><p>这台设备还有未同步的题目或贝壳。</p><button type="button" id="family-import" class="button secondary">把这台设备的记录加入账号</button></div>
-      <div class="dialog-actions"><button type="button" id="family-refresh" class="button secondary">同步一下</button><button type="button" id="family-logout" class="quiet">退出账号</button></div>
+      <div id="family-import-area" class="notice" hidden><p>这台设备上还有访客的学习记录。</p><button type="button" id="family-import" class="button secondary">加入这个账号</button></div>
+      <div class="account-row"><span><b>学习记录</b><small>题目本、贝壳和装扮</small></span><button type="button" id="family-refresh" class="account-action">同步一下</button></div>
+      <div class="account-row"><span><b>登录密码</b><small>由家长管理</small></span><button type="button" id="open-password" class="account-action">修改密码</button></div>
+      <div class="account-row"><span><b>家庭找回码</b><small id="recovery-state">忘记密码时用它找回账号</small></span><button type="button" id="open-code" class="account-action">设置找回码</button></div>
+      <form id="security-form" class="account-form account-subpanel" hidden>
+        <h3 id="security-title">修改密码</h3>
+        <p id="security-help"></p>
+        <label for="current-password">当前密码</label><input id="current-password" type="password" autocomplete="current-password" required minlength="8" maxlength="64">
+        <div id="change-fields"><label for="new-password">新密码（8–64 个字符）</label><input id="new-password" type="password" autocomplete="new-password" maxlength="64">
+        <label for="repeat-new">再输入一次新密码</label><input id="repeat-new" type="password" autocomplete="new-password" maxlength="64"></div>
+        <div class="dialog-actions"><button type="button" id="security-cancel" class="account-text">取消</button><button class="button primary" id="security-submit">保存新密码</button></div>
+      </form>
+      <div id="issued-code" class="account-subpanel" hidden><b>请家长保存这张找回卡</b><p>请把账号名和下面的找回码一起保管好。关闭后就看不到这组码了。</p><code id="code-value"></code><button type="button" id="code-copy" class="account-action">复制账号和找回码</button></div>
+      <button type="button" id="family-logout" class="account-text signout">退出当前账号</button>
     </div>
     <p id="family-error" role="status" class="status"></p>
   </dialog>

@@ -1,4 +1,4 @@
-import { equipItem, familyInfo, importLocalJournal, loadJournal, purchaseItem, removeEntries, saveEntry, signIn, signOut } from './journal.js?v=8';
+import { equipItem, verifyFamilySession, managePassword, familyInfo, importLocalJournal, loadJournal, purchaseItem, removeEntries, saveEntry, signIn, signOut } from './journal.js?v=9';
 import { createVoice } from './voice.js?v=5';
 import { createPhotoCropper } from './crop.js?v=1';
 import { createWardrobe } from './wardrobe.js?v=1';
@@ -847,29 +847,66 @@ byId('clear-history').addEventListener('click', () => {
 
 function selectFamilyMode(mode) {
   familyMode = mode;
-  byId('family-login').setAttribute('aria-pressed', String(mode === 'login'));
+  const login = mode === 'login';
+  const recover = mode === 'recover';
+  byId('family-login').setAttribute('aria-pressed', String(login));
   byId('family-create').setAttribute('aria-pressed', String(mode === 'register'));
-  byId('family-password').autocomplete = mode === 'login' ? 'current-password' : 'new-password';
-  byId('family-submit').textContent = mode === 'login' ? '登录' : '创建家庭账号';
-  byId('family-error').textContent = '';
+  byId('name-help').hidden = mode !== 'register';
+  byId('recovery-entry').hidden = !recover;
+  byId('reset-code').required = recover;
+  byId('confirm-entry').hidden = login;
+  byId('confirm-password').required = !login;
+  byId('family-password').autocomplete = login ? 'current-password' : 'new-password';
+  byId('family-password').value = byId('confirm-password').value = byId('reset-code').value = '';
+  byId('password-label').textContent = login ? '密码' : '设置新密码（8–64 个字符）';
+  byId('family-submit').textContent = login ? '登录' : recover ? '重设密码并登录' : '注册并登录';
+  byId('forgot-password').textContent = login ? '忘记密码？' : '返回登录';
+  byId('family-error').textContent = recover ? '请输入家长预先保存的找回码。找回码需要事先设置；如果没有保存，可以请家长查看浏览器保存的密码。' : '';
+}
+
+function closeSecurity() {
+  byId('security-form').reset();
+  byId('security-form').hidden = byId('issued-code').hidden = true;
+  byId('code-value').textContent = '';
 }
 
 async function renderFamily() {
   const { family, syncState, canImport } = await familyInfo();
   familyName = family?.name || '';
   const signedIn = Boolean(family && syncState !== 'expired');
-  byId('family-nav-text').textContent = family ? '我的家庭' : '家庭账号';
+  const label = signedIn ? familyName : syncState === 'unknown' ? '身份待确认' : '访客';
+  byId('family-nav-text').textContent = label;
+  byId('family-open').setAttribute('aria-label', '用户中心，' + label);
+  byId('family-open').title = '用户中心 · ' + label;
+  byId('account-state').textContent = signedIn ? '已登录的家庭账号' : '当前身份';
+  byId('family-signed-name').textContent = label;
   byId('family-auth').hidden = signedIn;
   byId('family-signed-in').hidden = !signedIn;
   byId('family-import-area').hidden = !canImport;
-  byId('family-signed-name').textContent = familyName;
-  byId('family-sync-status').textContent = syncState === 'synced'
-    ? '题目和贝壳已同步'
-    : '正在等待同步。联网后可再试一次。';
+  byId('family-sync-status').textContent = signedIn
+    ? (syncState === 'synced' ? '题目、贝壳和装扮已同步' : '等待联网同步')
+    : syncState === 'unknown' ? '联网后打开用户中心，再确认一次身份。' : '学习记录保存在这台设备上';
+  byId('recovery-state').textContent = family?.hasRecovery ? '已设置，由家长保管' : '尚未设置，忘记密码时可用';
+  byId('open-code').textContent = family?.hasRecovery ? '更换找回码' : '设置找回码';
   if (syncState === 'expired') {
     byId('family-name').value = familyName;
     byId('family-error').textContent = '登录已过期，请重新登录。';
   }
+}
+
+function announceAccountChange() {
+  try { localStorage.setItem('yuyu-account-change', crypto.randomUUID()); } catch {}
+}
+
+async function checkAccount() {
+  const changed = await verifyFamilySession();
+  if (changed) {
+    closeSecurity();
+    selectFamilyMode('login');
+    latestUnfinished = activeActivity = null;
+    nextProblem();
+  }
+  await renderFamily();
 }
 
 async function withFamilyAction(task) {
@@ -890,30 +927,80 @@ async function withFamilyAction(task) {
   }
 }
 
-byId('family-open').addEventListener('click', async () => {
-  byId('family-error').textContent = '';
-  byId('family-password').value = '';
+byId('family-open').addEventListener('click', () => {
+  selectFamilyMode('login');
   byId('family-dialog').showModal();
-  await renderFamily();
+  withFamilyAction(async () => { await checkAccount(); });
+});
+byId('family-dialog').addEventListener('close', () => {
+  closeSecurity();
+  byId('family-form').reset();
 });
 byId('family-dialog').addEventListener('cancel', (event) => {
   if (familyBusy) event.preventDefault();
 });
 byId('family-login').addEventListener('click', () => selectFamilyMode('login'));
 byId('family-create').addEventListener('click', () => selectFamilyMode('register'));
+byId('forgot-password').addEventListener('click', () => selectFamilyMode(familyMode === 'login' ? 'recover' : 'login'));
 byId('family-form').addEventListener('submit', (event) => {
   event.preventDefault();
   withFamilyAction(async () => {
     const previousFamily = familyName;
-    const family = await signIn(familyMode, {
-      name: byId('family-name').value.trim().toLowerCase(),
-      password: byId('family-password').value,
-    });
-    byId('family-password').value = '';
+    const password = byId('family-password').value;
+    if (familyMode !== 'login' && password !== byId('confirm-password').value) throw new Error('两次输入的密码不同，请再确认一次。');
+    const name = byId('family-name').value.trim().toLowerCase();
+    const data = familyMode === 'recover' ? { name, newPassword: password, code: byId('reset-code').value } : { name, password };
+    const family = await signIn(familyMode, data);
+    byId('family-form').reset();
+    announceAccountChange();
     if (family.name !== previousFamily) nextProblem();
     else refreshCurrentView();
-    return familyMode === 'register' ? '账号已创建。其他设备可以用同一个账号登录。' : '已登录。';
+    if (familyMode === 'register') return '账号已创建。请家长设置并保存家庭找回码。';
+    if (familyMode === 'recover') return '密码已重设。旧找回码已用完，请保存一组新的找回码。';
+    return '已登录。';
   });
+});
+function openSecurity(action) {
+  closeSecurity();
+  const changing = action === 'password';
+  byId('security-form').dataset.action = action;
+  byId('security-form').hidden = false;
+  byId('change-fields').hidden = !changing;
+  byId('new-password').required = byId('repeat-new').required = changing;
+  byId('security-title').textContent = changing ? '修改登录密码' : byId('open-code').textContent;
+  byId('security-help').textContent = changing ? '保存后，这台设备继续使用，其他设备需要用新密码登录。' : '请先验证当前密码。每次生成新码，之前的找回码就会失效。';
+  byId('security-submit').textContent = changing ? '保存新密码' : '生成找回码';
+  byId('family-error').textContent = '';
+  byId('current-password').focus();
+}
+byId('open-password').addEventListener('click', () => openSecurity('password'));
+byId('open-code').addEventListener('click', () => openSecurity('recovery-code'));
+byId('security-cancel').addEventListener('click', closeSecurity);
+byId('security-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  withFamilyAction(async () => {
+    const action = byId('security-form').dataset.action;
+    const fields = { currentPassword: byId('current-password').value };
+    if (action === 'password') {
+      fields.newPassword = byId('new-password').value;
+      if (fields.newPassword !== byId('repeat-new').value) throw new Error('两次输入的新密码不同。');
+    }
+    const result = await managePassword(action, fields);
+    closeSecurity();
+    if (action === 'password') return '新密码已保存。';
+    byId('code-value').textContent = result.code;
+    byId('issued-code').hidden = false;
+    byId('issued-code').scrollIntoView({ block: 'nearest' });
+    return '找回码已生成。';
+  });
+});
+byId('code-copy').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText('鱼渔家庭账号 ' + familyName + '\n找回码 ' + byId('code-value').textContent);
+    byId('family-error').textContent = '已复制，请家长妥善保存。';
+  } catch {
+    byId('family-error').textContent = '请长按或选中找回码，手动复制。';
+  }
 });
 byId('family-refresh').addEventListener('click', () => withFamilyAction(async () => {
   const data = await loadJournal();
@@ -930,6 +1017,9 @@ byId('family-import').addEventListener('click', () => withFamilyAction(async () 
 }));
 byId('family-logout').addEventListener('click', () => withFamilyAction(async () => {
   await signOut();
+  closeSecurity();
+  announceAccountChange();
+  latestUnfinished = activeActivity = null;
   byId('family-name').value = '';
   selectFamilyMode('login');
   nextProblem();
@@ -958,12 +1048,22 @@ async function refreshCurrentView(refresh = true) {
   } catch {}
 }
 
-document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && !busy) refreshCurrentView();
+async function refreshAccountAndView() {
+  if (busy || familyBusy || document.hidden) return;
+  try {
+    await checkAccount();
+    await refreshCurrentView();
+    await renderFamily();
+  } catch {}
+}
+document.addEventListener('visibilitychange', refreshAccountAndView);
+window.addEventListener('online', refreshAccountAndView);
+window.addEventListener('storage', (event) => {
+  if (event.key === 'yuyu-account-change') refreshAccountAndView();
 });
-window.addEventListener('online', () => refreshCurrentView());
 window.addEventListener('pagehide', () => {
   voice.cancelRecord();
   voice.stopReading();
 });
+renderFamily().catch(() => {});
 refreshHome().then(renderFamily).catch(() => {});

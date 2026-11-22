@@ -424,13 +424,56 @@ export function createFamilyHandler({
       const secret = newSession(family);
       await write(id, family);
       if (action === 'register') familyCount++;
-      return secret;
+      return { secret, hasRecovery: Boolean(family.recoveryHash) };
     }
-    const secret = action === 'register'
+    const { secret, hasRecovery } = action === 'register'
       ? await lock('register', () => lock(id, openSession))
       : await lock(id, openSession);
     setCookie(res, id + '.' + secret, secureCookies, cookiePath);
-    return json(res, 200, { family: { name } });
+    return json(res, 200, { family: { name, hasRecovery } });
+  }
+
+  async function replacePassword(id, family, password, res, json, recovering) {
+    const salt = randomBytes(16).toString('hex');
+    family.passwordHash = (await derivePassword(password, salt)).toString('hex');
+    family.salt = salt;
+    family.sessions = {};
+    if (recovering) delete family.recoveryHash;
+    const secret = newSession(family);
+    await write(id, family);
+    setCookie(res, id + '.' + secret, secureCookies, cookiePath);
+    return json(res, 200, { family: { name: family.name } });
+  }
+
+  async function recover(req, body, res, json) {
+    const { id, password } = normalizeCredentials({ name: body.name, password: body.newPassword }, true);
+    checkLimit('recover-ip:' + (req.headers['x-real-ip'] || req.socket.remoteAddress), 20, hour);
+    checkLimit('recover-account:' + id, 10, hour);
+    const code = String(body.code || '').replace(/[\s-]/g, '').toUpperCase();
+    return lock(id, async () => {
+      const family = await read(id);
+      if (!/^[0-9A-F]{32}$/.test(code) || !family?.recoveryHash ||
+          !timingSafeEqual(Buffer.from(sha256(code), 'hex'), Buffer.from(family.recoveryHash, 'hex'))) {
+        throw failure(400, '账号名或找回码不匹配，请核对家长保存的那一组。');
+      }
+      return replacePassword(id, family, password, res, json, true);
+    });
+  }
+
+  async function managePassword(action, id, family, body, res, json) {
+    checkLimit('manage-password:' + id, 15, hour);
+    const { password } = normalizeCredentials({ name: family.name, password: body.currentPassword }, false);
+    const supplied = await derivePassword(password, family.salt);
+    if (!timingSafeEqual(supplied, Buffer.from(family.passwordHash, 'hex'))) throw failure(400, '当前密码不正确。');
+    if (action === 'recovery-code') {
+      const code = randomBytes(16).toString('hex').toUpperCase();
+      family.recoveryHash = sha256(code);
+      await write(id, family);
+      return json(res, 200, { code: code.match(/.{4}/g).join('-') });
+    }
+    const next = normalizeCredentials({ name: family.name, password: body.newPassword }, true);
+    if (next.password === password) throw failure(400, '请设置一个与当前密码不同的新密码。');
+    return replacePassword(id, family, next.password, res, json, false);
   }
 
   async function sync(id, family, body, res, json) {
@@ -508,7 +551,7 @@ export function createFamilyHandler({
 
   async function handleFamily(req, res, action, readJson, json) {
     const isRead = req.method === 'GET' && (action === 'session' || action === 'journal');
-    const isWrite = req.method === 'POST' && ['register', 'login', 'logout', 'sync', 'purchase', 'equip'].includes(action);
+    const isWrite = req.method === 'POST' && ['register', 'login', 'logout', 'sync', 'purchase', 'equip', 'password', 'recovery-code', 'recover'].includes(action);
     if (!isRead && !isWrite) throw failure(404, '找不到这个家庭账号操作。');
     if (isWrite && (req.headers['x-yuyu-family'] !== '1' || req.headers['sec-fetch-site'] === 'cross-site' ||
         req.headers['sec-fetch-site'] === 'same-site')) {
@@ -520,6 +563,7 @@ export function createFamilyHandler({
     }
     const body = isWrite ? await readJson(req) : null;
     if (action === 'login' || action === 'register') return await authenticate(action, req, res, body, json);
+    if (action === 'recover') return await recover(req, body, res, json);
     const cookie = readCookie(req);
     if (!cookie) {
       if (action === 'logout') setCookie(res, '', secureCookies, cookiePath);
@@ -531,7 +575,7 @@ export function createFamilyHandler({
     return await lock(id, async () => {
       const family = await read(id);
       const signedIn = Number(family?.sessions[sessionHash]) > Date.now();
-      if (action === 'session') return json(res, 200, { family: signedIn ? { name: family.name } : null });
+      if (action === 'session') return json(res, 200, { family: signedIn ? { name: family.name, hasRecovery: Boolean(family.recoveryHash) } : null });
       if (signedIn && req.headers['x-yuyu-family-name'] !== family.name) {
         throw failure(401, '当前浏览器切换了家庭账号，请重新登录。');
       }
@@ -544,6 +588,7 @@ export function createFamilyHandler({
         return json(res, 200, { family: null });
       }
       if (!signedIn) throw failure(401, '请先登录你的家庭账号。');
+      if (action === 'password' || action === 'recovery-code') return managePassword(action, id, family, body, res, json);
       checkLimit('journal:' + id, 180, 60_000);
       if (action === 'journal') return json(res, 200, snapshot(family.journal));
       if (action === 'purchase') return await purchase(id, family, body, res, json);
