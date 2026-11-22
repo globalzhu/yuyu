@@ -1,7 +1,11 @@
+import { WARDROBE_ITEMS, WARDROBE_SLOTS, emptyWardrobe, normalizeWardrobe, wardrobeSpent } from './wardrobe-catalog.mjs?v=1';
+
 const memory = new Map();
 const memoryAwards = new Set();
 let memoryShells = 0;
 let memoryChallengeShells = 0;
+let memoryWardrobe = emptyWardrobe();
+const memoryActivityBonuses = {};
 try {
   memoryShells = Math.max(0, Math.floor(Number(localStorage.getItem('yuyu-shells')) || 0));
 } catch {}
@@ -34,25 +38,54 @@ function done(transaction) {
 
 async function loadLocalJournal() {
   const db = await database;
-  if (!db) return { entries: [...memory.values()], shells: memoryShells, challengeShells: memoryChallengeShells, local: false };
-  const tx = db.transaction(['entries', 'settings'], 'readonly');
+  if (!db) return { entries: [...memory.values()], ...localEconomy(memoryShells, memoryWardrobe),
+    ...activitySnapshot(memoryActivityBonuses), solvedCount: [...memoryAwards].filter(isQuestionId).length,
+    challengeShells: memoryChallengeShells, local: false };
+  const tx = db.transaction(['entries', 'settings', 'awards'], 'readonly');
   const settings = tx.objectStore('settings');
-  const [entries, shells, challengeShells] = await Promise.all([
+  const [entries, shells, challengeShells, wardrobe, bonuses, awards] = await Promise.all([
     resultOf(tx.objectStore('entries').getAll()),
     resultOf(settings.get('shells')),
     resultOf(settings.get('challengeShells')),
+    resultOf(settings.get('wardrobe')),
+    resultOf(settings.get('activityBonuses')),
+    resultOf(tx.objectStore('awards').getAllKeys()),
   ]);
-  return { entries, shells: shells || 0, challengeShells: challengeShells || 0, local: true };
+  return { entries, ...localEconomy(shells || 0, wardrobe), ...activitySnapshot(bonuses),
+    solvedCount: awards.filter(isQuestionId).length, challengeShells: challengeShells || 0, local: true };
+}
+
+const isQuestionId = (id) => /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(id);
+
+function activitySnapshot(bonuses = {}) {
+  return { awardedActivityIds: Object.values(bonuses), activityBonusShells: Object.keys(bonuses).length * 2 };
+}
+
+function localEconomy(earnedShells, savedWardrobe) {
+  const wardrobe = normalizeWardrobe(savedWardrobe);
+  return { earnedShells, shells: Math.max(0, earnedShells - wardrobeSpent(wardrobe)), wardrobe };
 }
 
 function localChallengeReady(entry, parent) {
   return Boolean(entry.parentId && entry.parentId !== entry.id && entry.completionToken &&
-    parent?.solved && !parent.challenge && !parent.parentId);
+    parent && (parent.solved || entry.activityId) && !parent.challenge && !parent.parentId);
+}
+
+function awardActivity(entry, entries, bonuses) {
+  const candidate = entry.activityId ? entry : entries.find((item) => item.parentId === entry.id && item.activityId);
+  if (!candidate || bonuses[candidate.parentId]) return false;
+  const parent = entries.find((item) => item.id === candidate.parentId);
+  if (!parent || parent.challenge || parent.parentId) return false;
+  const children = entries.filter((item) => item.activityId === candidate.activityId && item.parentId === candidate.parentId);
+  if (![0, 1, 2].every((index) => children.some((item) => item.activityIndex === index && item.solved && item.completionToken))) return false;
+  bonuses[candidate.parentId] = candidate.activityId;
+  return candidate.parentId;
 }
 
 async function saveLocalEntry(entry) {
   const challenge = entry.challenge === true || Boolean(entry.parentId);
-  const parentAward = challenge ? 'challenge:' + entry.parentId : undefined;
+  const parentAward = entry.activityId ? 'activity:' + entry.parentId + ':' + entry.activityIndex
+    : challenge ? 'challenge:' + entry.parentId : undefined;
   const keys = parentAward ? [entry.id, parentAward] : [entry.id];
   const db = await database;
   if (!db) {
@@ -64,29 +97,87 @@ async function saveLocalEntry(entry) {
       if (challenge) memoryChallengeShells++;
     }
     memory.set(entry.id, structuredClone(entry));
-    return { shells: memoryShells, awarded, local: false };
+    const activityBonus = awardActivity(entry, [...memory.values()], memoryActivityBonuses);
+    if (activityBonus) memoryShells += 2;
+    return { ...localEconomy(memoryShells, memoryWardrobe), ...activitySnapshot(memoryActivityBonuses),
+      activityBonusAwarded: activityBonus ? [activityBonus] : [], awarded, local: false };
   }
   const tx = db.transaction(['entries', 'awards', 'settings'], 'readwrite');
   const finished = done(tx);
   const awards = tx.objectStore('awards');
   const settings = tx.objectStore('settings');
   const entries = tx.objectStore('entries');
-  const [oldAwards, savedShells, parent, savedChallengeShells] = await Promise.all([
+  const [oldAwards, savedShells, parent, savedChallengeShells, wardrobe, savedBonuses, savedEntries] = await Promise.all([
     Promise.all(keys.map((key) => resultOf(awards.get(key)))),
     resultOf(settings.get('shells')),
     challenge && entry.parentId ? resultOf(entries.get(entry.parentId)) : undefined,
     challenge ? resultOf(settings.get('challengeShells')) : undefined,
+    resultOf(settings.get('wardrobe')),
+    resultOf(settings.get('activityBonuses')),
+    resultOf(entries.getAll()),
   ]);
   const awarded = entry.solved && !oldAwards.some(Boolean) && (!challenge || localChallengeReady(entry, parent));
-  const shells = (savedShells || 0) + Number(awarded);
+  const bonuses = savedBonuses || {};
+  const activityBonus = awardActivity(entry, [...savedEntries.filter((item) => item.id !== entry.id), entry], bonuses);
+  const shells = (savedShells || 0) + Number(awarded) + (activityBonus ? 2 : 0);
   if (awarded) {
     for (const key of keys) awards.put(true, key);
-    settings.put(shells, 'shells');
     if (challenge) settings.put((savedChallengeShells || 0) + 1, 'challengeShells');
   }
+  if (awarded || activityBonus) settings.put(shells, 'shells');
+  if (activityBonus) settings.put(bonuses, 'activityBonuses');
   entries.put(entry);
   await finished;
-  return { shells, awarded, local: true };
+  return { ...localEconomy(shells, wardrobe), ...activitySnapshot(bonuses),
+    activityBonusAwarded: activityBonus ? [activityBonus] : [], awarded, local: true };
+}
+
+function purchaseWardrobe(wardrobe, earnedShells, itemId) {
+  const item = WARDROBE_ITEMS.find((item) => item.id === itemId);
+  if (!item) throw new Error('没有找到这个装扮。');
+  const purchased = !wardrobe.owned.includes(itemId);
+  if (purchased && localEconomy(earnedShells, wardrobe).shells < item.price) {
+    throw new Error('贝壳还差一点，先解一道题再来吧。');
+  }
+  if (purchased) wardrobe.owned.push(itemId);
+  wardrobe.equipped[item.slot] = itemId;
+  wardrobe.revision++;
+  return { purchased };
+}
+
+function equipWardrobe(wardrobe, slot, itemId) {
+  if (!WARDROBE_SLOTS.some((item) => item.id === slot)) throw new Error('没有找到这个装扮位置。');
+  if (itemId !== null && !WARDROBE_ITEMS.some((item) => item.id === itemId && item.slot === slot && wardrobe.owned.includes(itemId))) {
+    throw new Error('先兑换这个装扮，就能给小鱼穿上。');
+  }
+  wardrobe.equipped[slot] = itemId;
+  wardrobe.revision++;
+  return {};
+}
+
+async function changeLocalWardrobe(change) {
+  const db = await database;
+  if (!db) {
+    const wardrobe = normalizeWardrobe(memoryWardrobe);
+    const result = change(wardrobe, memoryShells);
+    memoryWardrobe = wardrobe;
+    return { ...localEconomy(memoryShells, wardrobe), ...result, local: false };
+  }
+  const tx = db.transaction('settings', 'readwrite');
+  const finished = done(tx);
+  const store = tx.objectStore('settings');
+  const [earned, saved] = await Promise.all([resultOf(store.get('shells')), resultOf(store.get('wardrobe'))]);
+  const wardrobe = normalizeWardrobe(saved);
+  let result;
+  try {
+    result = change(wardrobe, earned || 0);
+  } catch (error) {
+    await finished;
+    throw error;
+  }
+  store.put(wardrobe, 'wardrobe');
+  await finished;
+  return { ...localEconomy(earned || 0, wardrobe), ...result, local: true };
 }
 
 async function removeLocalEntries(id) {
@@ -128,7 +219,7 @@ let syncTask = Promise.resolve();
 
 async function familyRequest(action, body) {
   const headers = {};
-  if (family && ['journal', 'sync', 'logout'].includes(action)) headers['X-Yuyu-Family-Name'] = family.name;
+  if (family && ['journal', 'sync', 'logout', 'purchase', 'equip'].includes(action)) headers['X-Yuyu-Family-Name'] = family.name;
   if (body !== undefined) Object.assign(headers, { 'Content-Type': 'application/json', 'X-Yuyu-Family': '1' });
   const response = await fetch('api/family/' + action, {
     cache: 'no-store',
@@ -256,6 +347,10 @@ function visibleFamilyJournal() {
   return {
     entries: [...entries.values()].map((item) => ({ ...item, carriedAttempt: carriedAttempts[item.id] })),
     shells: confirmed?.shells || 0,
+    earnedShells: confirmed?.earnedShells ?? confirmed?.shells ?? 0,
+    wardrobe: normalizeWardrobe(confirmed?.wardrobe),
+    solvedCount: confirmed?.solvedCount || 0,
+    awardedActivityIds: confirmed?.awardedActivityIds || [],
     local: true,
     family,
     syncState,
@@ -275,7 +370,7 @@ export async function familyInfo() {
   await ready;
   if (!family) return { family: null };
   const [local, imported] = await Promise.all([loadLocalJournal(), setting('imported:' + family.name)]);
-  return { family, syncState, canImport: !imported && (local.entries.length > 0 || local.shells > 0) };
+  return { family, syncState, canImport: !imported && (local.entries.length > 0 || local.earnedShells > 0 || local.wardrobe.owned.length > 0) };
 }
 
 export async function signIn(mode, credentials) {
@@ -299,13 +394,40 @@ export async function signOut() {
 export async function importLocalJournal() {
   await ready;
   return serialize(async () => {
-    const { entries, shells, challengeShells } = await loadLocalJournal();
+    const { entries, earnedShells, challengeShells, wardrobe, activityBonusShells } = await loadLocalJournal();
     let deviceId = await setting('device-id');
     if (!deviceId) deviceId = await setting('device-id', crypto.randomUUID());
-    await sendChanges([], { deviceId, entries, shells, challengeShells });
+    const result = await sendChanges([], { deviceId, entries, shells: earnedShells, challengeShells, wardrobe, activityBonusShells });
     await setting('imported:' + family.name, true);
-    return visibleFamilyJournal();
+    return { ...visibleFamilyJournal(), skippedWardrobeItems: result.skippedWardrobeItems || [] };
   });
+}
+
+async function changeWardrobe(action, body, localChange) {
+  await ready;
+  return serialize(async () => {
+    if (!family) return changeLocalWardrobe(localChange);
+    await pull();
+    if (pending.length || syncState !== 'synced') throw new Error('先连上网络同步贝壳，再来兑换装扮吧。');
+    try {
+      const result = await familyRequest(action, body);
+      confirmed = result;
+      syncState = 'synced';
+      return result;
+    } catch (error) {
+      if (Array.isArray(error.data?.entries)) confirmed = error.data;
+      if (error.status === 401) syncState = 'expired';
+      throw error;
+    }
+  });
+}
+
+export function purchaseItem(itemId) {
+  return changeWardrobe('purchase', { itemId }, (wardrobe, earned) => purchaseWardrobe(wardrobe, earned, itemId));
+}
+
+export function equipItem(slot, itemId) {
+  return changeWardrobe('equip', { slot, itemId }, (wardrobe) => equipWardrobe(wardrobe, slot, itemId));
 }
 
 export async function saveEntry(entry) {
@@ -325,17 +447,21 @@ export async function saveEntry(entry) {
         delete carriedAttempts[entry.id];
         await setting('drafts:' + family.name, carriedAttempts);
       }
-      return { entry: result.entries.find((item) => item.id === entry.id), shells: result.shells, awarded: result.awarded.includes(entry.id) };
+      return { entry: result.entries.find((item) => item.id === entry.id), shells: result.shells,
+        earnedShells: result.earnedShells, wardrobe: result.wardrobe, awarded: result.awarded.includes(entry.id),
+        awardedActivityIds: result.awardedActivityIds, activityBonusAwarded: result.activityBonusAwarded };
     } catch (error) {
       if (error.status === 409 && Array.isArray(error.data.entries)) {
         await storeResult();
-        return { conflict: true, entry: confirmed.entries.find((item) => item.id === entry.id), shells: confirmed.shells };
+        return { conflict: true, entry: confirmed.entries.find((item) => item.id === entry.id), shells: confirmed.shells,
+          earnedShells: confirmed.earnedShells, wardrobe: confirmed.wardrobe };
       }
       if (error.status && error.status < 500 && error.status !== 401 && error.status !== 429) throw error;
       pending = pending.filter((item) => item.id !== entry.id);
       pending.push(change);
       await rememberPending();
-      return { pending: true, shells: confirmed?.shells || 0, local: Boolean(await database) };
+      return { pending: true, shells: confirmed?.shells || 0, earnedShells: confirmed?.earnedShells || 0,
+        wardrobe: normalizeWardrobe(confirmed?.wardrobe), local: Boolean(await database) };
     }
   });
 }

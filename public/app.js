@@ -1,6 +1,9 @@
-import { familyInfo, importLocalJournal, loadJournal, removeEntries, saveEntry, signIn, signOut } from './journal.js?v=7';
+import { equipItem, familyInfo, importLocalJournal, loadJournal, purchaseItem, removeEntries, saveEntry, signIn, signOut } from './journal.js?v=8';
 import { createVoice } from './voice.js?v=5';
 import { createPhotoCropper } from './crop.js?v=1';
+import { createWardrobe } from './wardrobe.js?v=1';
+import { emptyWardrobe } from './wardrobe-catalog.mjs?v=1';
+import { createLeaderboard, createPractice } from './practice.js?v=1';
 
 const byId = (id) => document.getElementById(id);
 const problem = byId('problem');
@@ -46,6 +49,9 @@ let busy = false;
 let photoLoading = false;
 let confirming = false;
 let shells = 0;
+let earnedShells = 0;
+let currentWardrobe = emptyWardrobe();
+let activeActivity;
 let historyFilter = 'all';
 let deleteTarget;
 let loadVersion = 0;
@@ -68,6 +74,33 @@ const voice = createVoice({
   },
 });
 
+const wardrobeUI = createWardrobe({
+  async purchase(itemId) {
+    const data = await purchaseItem(itemId);
+    updateEconomy(data);
+    renderReef();
+    return data;
+  },
+  async equip(slot, itemId) {
+    const data = await equipItem(slot, itemId);
+    updateEconomy(data);
+    return data;
+  },
+  report,
+});
+
+const practiceUI = createPractice({
+  async openQuestion(question) {
+    const data = await loadJournal();
+    updateEconomy(data);
+    const saved = data.entries.find((item) => item.id === question.entryId);
+    if (!saved) throw new Error('这道题还没同步好，请重新打开闯关。');
+    openEntry(saved);
+  },
+  report,
+});
+const leaderboardUI = createLeaderboard({ refresh: fetchLeaderboard, report });
+
 function updateControls() {
   const mic = voice.recordingButton;
   const blocked = busy || Boolean(mic);
@@ -78,6 +111,7 @@ function updateControls() {
   byId('new-problem').disabled = byId('restart-problem').disabled = busy;
   byId('next-problem').disabled = byId('review-solution').disabled = busy;
   byId('start-challenge').disabled = byId('review-challenge').disabled = busy;
+  byId('start-practice').disabled = byId('review-practice').disabled = busy;
   byId('speak-problem').disabled = busy || photoLoading || Boolean(mic && mic.id !== 'speak-problem') || voice.transcribing;
   byId('speak-attempt').disabled = busy || Boolean(mic && mic.id !== 'speak-attempt') || voice.transcribing;
   problem.readOnly = attempt.readOnly = blocked;
@@ -228,9 +262,11 @@ function renderLesson(award) {
   const last = entry.turns.at(-1);
   byId('lesson-title').textContent = entry.solved ? '解法回顾' : '一起解题';
   byId('problem-view').textContent = entry.problem;
-  byId('lesson-subtitle').textContent = entry.challenge ? '相似题挑战 · 试试刚学的办法'
+  byId('lesson-subtitle').textContent = entry.activityId ? `三题闯关 · 第 ${entry.activityIndex + 1} 题`
+    : entry.challenge ? '相似题挑战 · 试试刚学的办法'
     : entry.example ? '跟着鱼渔练一练' : '小学四年级 · 一次做一步';
   byId('review-challenge').hidden = !canStartChallenge(entry);
+  byId('review-practice').hidden = !canStartPractice(entry) && !entry.activityId;
   for (const stage of stages) {
     const i = Number(stage.dataset.stage);
     stage.classList.toggle('done', entry.solved || i < entry.stage);
@@ -300,17 +336,21 @@ function renderCompletion(award) {
   const unlock = byId('completion-unlock');
   const offersChallenge = canStartChallenge(entry);
   byId('start-challenge').hidden = !offersChallenge;
-  byId('next-problem').classList.toggle('primary', !offersChallenge);
-  byId('next-problem').classList.toggle('secondary', offersChallenge);
-  byId('completion-title').textContent = entry.challenge ? '相似题挑战完成！' : '这道题做完啦！';
+  const offersPractice = canStartPractice(entry) || Boolean(entry.activityId);
+  byId('start-practice').hidden = !offersPractice;
+  byId('start-practice').textContent = entry.activityId ? '查看闯关进度 →' : '三题闯关 →';
+  byId('next-problem').classList.toggle('primary', !offersPractice && !offersChallenge);
+  byId('next-problem').classList.toggle('secondary', offersPractice || offersChallenge);
+  byId('completion-title').textContent = entry.activityId ? '这一关解开啦！' : entry.challenge ? '相似题挑战完成！' : '这道题做完啦！';
   byId('completion-encouragement').textContent = entry.challenge
     ? '刚学的办法，你又用对了一次。'
     : '你一步一步把题解开了。';
   byId('completion').classList.toggle('just-earned', Boolean(award?.awarded));
   reward.hidden = !award?.awarded && !award?.pending;
-  byId('completion-reward-text').textContent = !award?.awarded ? '贝壳会在同步后到账'
-    : entry.challenge ? '再收到 1 枚贝壳' : '收到 1 枚贝壳';
-  const unlocked = award?.awarded && rewardLevels.find((level) => level.goal === shells);
+  byId('completion-reward-text').textContent = award?.activityBonusAwarded?.includes(entry.parentId)
+    ? '本题 1 枚，闯关奖励再得 2 枚贝壳！'
+    : !award?.awarded ? '贝壳会在同步后到账' : entry.challenge ? '再收到 1 枚贝壳' : '收到 1 枚贝壳';
+  const unlocked = award?.awarded && rewardLevels.find((level) => level.goal === earnedShells);
   unlock.hidden = !unlocked;
   unlock.textContent = unlocked ? `${unlocked.icon} 遇见了新伙伴「${unlocked.name}」` : '';
 }
@@ -346,16 +386,23 @@ function canStartChallenge(item) {
   return Boolean(item?.solved && !item.challenge && !item.parentId);
 }
 
-function updateShells(value) {
-  shells = value;
-  byId('shell-count').textContent = value;
+function canStartPractice(item) {
+  return Boolean(item && !item.challenge && !item.parentId && (item.token || item.completionToken || item.solved));
+}
+
+function updateEconomy(data) {
+  shells = data.shells;
+  earnedShells = data.earnedShells ?? data.shells;
+  currentWardrobe = data.wardrobe || currentWardrobe;
+  byId('shell-count').textContent = shells;
+  wardrobeUI.render({ shells, earnedShells, wardrobe: currentWardrobe });
 }
 
 async function persist() {
   try {
     const local = entry;
     const award = await saveEntry(entry);
-    updateShells(award.shells);
+    updateEconomy(award);
     if (award.conflict) {
       entry = award.entry || local;
       if (!award.entry) entry.expired = true;
@@ -374,14 +421,19 @@ async function persist() {
   }
 }
 
-async function begin(reply, prior) {
+function entryFromReply(reply, prior) {
   const now = Date.now();
-  entry = {
+  return {
     id: prior?.id || reply.entryId || crypto.randomUUID(), createdAt: prior?.createdAt || now, updatedAt: now,
     problem: reply.problem, token: reply.token, stage: reply.stage, example: reply.example,
     solved: reply.solved, revision: prior?.revision, turns: [...(prior?.turns || []), lessonTurn(reply)],
     challenge: reply.challenge === true, parentId: reply.parentId, completionToken: reply.completionToken,
+    activityId: reply.activityId, activityIndex: reply.activityIndex,
   };
+}
+
+async function begin(reply, prior) {
+  entry = entryFromReply(reply, prior);
   clearPhoto();
   confirming = false;
   attempt.value = '';
@@ -516,6 +568,74 @@ function startChallenge(original, statusContainer) {
 byId('start-challenge').addEventListener('click', () => startChallenge(entry, byId('completion-status')));
 byId('review-challenge').addEventListener('click', () => startChallenge(entry, byId('lesson-status')));
 
+async function loadActivity(original, data) {
+  let saved = data.entries.filter((item) => item.parentId === original.id && item.activityId);
+  if (saved.length < 3) {
+    const group = await request('activity', {
+      parentId: original.id, token: original.completionToken || original.token,
+      legacyProblem: original.completionToken || original.token ? undefined : original.problem,
+    });
+    for (const reply of group.questions) {
+      if (data.entries.some((item) => item.id === reply.entryId)) continue;
+      await saveEntry(entryFromReply(reply));
+    }
+    data = await loadJournal();
+    saved = data.entries.filter((item) => item.activityId === group.activityId);
+  }
+  saved.sort((a, b) => a.activityIndex - b.activityIndex);
+  if (saved.length !== 3) throw new Error('三道题还没同步完整，请联网后再试。');
+  updateEconomy(data);
+  activeActivity = {
+    activityId: saved[0].activityId, parentId: original.id,
+    questions: saved.map((item) => ({ entryId: item.id, problem: item.problem })),
+    bonusAwarded: data.awardedActivityIds?.includes(saved[0].activityId),
+  };
+  practiceUI.render(activeActivity, data.entries, data);
+}
+
+function startPractice(original = entry, near) {
+  const area = near || byId(view === 'history' ? 'history-status' : entry?.solved ? 'completion-status' : 'lesson-status');
+  waitFor(area, '🐠 鱼渔在准备三道同类题…', async () => {
+    const data = await loadJournal();
+    const source = original.activityId ? data.entries.find((item) => item.id === original.parentId) : original;
+    if (!canStartPractice(source)) throw new Error('先打开原题，再来三题闯关吧。');
+    await loadActivity(source, data);
+    report('');
+    openView('practice');
+  });
+}
+
+byId('start-practice').addEventListener('click', () => startPractice());
+byId('review-practice').addEventListener('click', () => startPractice());
+byId('jump-leaderboard').addEventListener('click', () => {
+  const title = byId('leaderboard-title');
+  title.tabIndex = -1;
+  title.focus({ preventScroll: true });
+  byId('leaderboard').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+});
+
+async function refreshPractice() {
+  if (!activeActivity) return;
+  const data = await loadJournal();
+  updateEconomy(data);
+  activeActivity.bonusAwarded = data.awardedActivityIds?.includes(activeActivity.activityId);
+  practiceUI.render(activeActivity, data.entries, data);
+}
+
+async function fetchLeaderboard() {
+  const response = await fetch('api/leaderboard', { cache: 'no-store' });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || '学习榜暂时没打开，稍后再刷新吧。');
+  return result;
+}
+
+async function refreshLeaderboard() {
+  leaderboardUI.loading(true);
+  try { leaderboardUI.render(await fetchLeaderboard()); }
+  catch { report('学习榜暂时没打开，稍后可以再刷新。', byId('leaderboard')); }
+  finally { leaderboardUI.loading(false); }
+}
+
 function nextProblem() {
   entry = null;
   reviewingSolution = false;
@@ -550,6 +670,7 @@ function openView(next, focus = true, keepStatus = false) {
   byId('completion').hidden = !completion;
   byId('history').hidden = next !== 'history';
   byId('reef').hidden = next !== 'reef';
+  byId('practice').hidden = next !== 'practice';
   for (const tab of document.querySelectorAll('[data-tab]')) {
     if (tab.dataset.view === next) tab.setAttribute('aria-current', 'page');
     else tab.removeAttribute('aria-current');
@@ -557,6 +678,7 @@ function openView(next, focus = true, keepStatus = false) {
   report(keepStatus ? status.textContent : '');
   if (next === 'history') refreshHistory();
   if (next === 'reef') refreshReef();
+  if (next === 'practice') refreshPractice();
   if (next === 'study' && !entry) refreshHome();
   if (focus) {
     window.scrollTo({ top: 0 });
@@ -579,7 +701,7 @@ function openEntry(item) {
 async function refreshHome() {
   try {
     const data = await loadJournal();
-    updateShells(data.shells);
+    updateEconomy(data);
     latestUnfinished = data.entries.filter((item) => !item.solved).sort((a, b) => b.updatedAt - a.updatedAt)[0];
     byId('continue-card').hidden = view !== 'study' || !!entry || !latestUnfinished;
     if (latestUnfinished) byId('continue-problem').textContent = latestUnfinished.problem;
@@ -597,9 +719,10 @@ async function refreshHistory(refresh = true) {
   const list = byId('history-list');
   const empty = byId('history-empty');
   try {
-    const { entries, shells: count, local, family } = await loadJournal({ refresh });
+    const data = await loadJournal({ refresh });
+    const { entries, local, family } = data;
     if (version !== loadVersion || view !== 'history') return;
-    updateShells(count);
+    updateEconomy(data);
     byId('history-storage').textContent = family
       ? '题目本会跟着家庭账号同步。'
       : '访客记录存在当前浏览器，登录家庭账号后可以带到其他设备。';
@@ -617,6 +740,7 @@ async function refreshHistory(refresh = true) {
       const meta = node('div', 'history-meta');
       meta.append(node('span', item.solved ? 'flag solved' : 'flag', item.solved ? '✓ 已解开' : '还在想'),
         node('time', '', dateLabel.format(item.updatedAt)));
+      if (item.activityId) meta.append(node('span', 'flag', `闯关 ${item.activityIndex + 1} / 3`));
       const title = node('p', 'history-problem', item.problem);
       const actions = node('div', 'history-actions');
       const open = node('button', 'button secondary', item.solved ? '看解题记录' : '接着做');
@@ -631,6 +755,13 @@ async function refreshHistory(refresh = true) {
         challenge.setAttribute('aria-controls', 'history-status');
         challenge.addEventListener('click', () => startChallenge(item, byId('history-status')));
         actions.append(challenge);
+      }
+      if (canStartPractice(item) || item.activityId) {
+        const activity = node('button', 'button secondary', item.activityId ? '查看闯关' : '三题闯关');
+        activity.type = 'button';
+        activity.disabled = busy;
+        activity.addEventListener('click', () => startPractice(item, byId('history-status')));
+        actions.append(activity);
       }
       const remove = node('button', 'quiet', '删除');
       remove.type = 'button';
@@ -678,18 +809,18 @@ byId('delete-history').addEventListener('close', async (event) => {
 });
 
 function renderReef() {
-  byId('reef-count').textContent = '🐚 ' + shells + ' 枚贝壳';
-  const next = rewardLevels.find((level) => level.goal > shells);
+  byId('reef-count').textContent = '累计获得 ' + earnedShells + ' 枚';
+  const next = rewardLevels.find((level) => level.goal > earnedShells);
   byId('reef-progress-label').textContent = next
-    ? `再收集 ${next.goal - shells} 枚，就能遇见「${next.name}」。`
+    ? `再收集 ${next.goal - earnedShells} 枚，就能遇见「${next.name}」。`
     : '图鉴里的海洋伙伴都到齐啦！';
   const progress = byId('reef-progress');
   progress.max = next?.goal || rewardLevels.at(-1).goal;
-  progress.value = Math.min(shells, progress.max);
+  progress.value = Math.min(earnedShells, progress.max);
   const stickers = byId('stickers');
   stickers.replaceChildren();
   for (const level of rewardLevels) {
-    const collected = shells >= level.goal;
+    const collected = earnedShells >= level.goal;
     const card = node('article', 'sticker ' + (collected ? level.color : 'locked'));
     const icon = node('span', 'sticker-icon', collected ? level.icon : '✧');
     icon.setAttribute('aria-hidden', 'true');
@@ -702,9 +833,10 @@ function renderReef() {
 async function refreshReef() {
   try {
     const data = await loadJournal();
-    updateShells(data.shells);
+    updateEconomy(data);
   } catch {}
   renderReef();
+  refreshLeaderboard();
 }
 
 byId('about-button').addEventListener('click', () => byId('about').showModal());
@@ -785,14 +917,16 @@ byId('family-form').addEventListener('submit', (event) => {
 });
 byId('family-refresh').addEventListener('click', () => withFamilyAction(async () => {
   const data = await loadJournal();
-  updateShells(data.shells);
+  updateEconomy(data);
   refreshCurrentView(false);
 }));
 byId('family-import').addEventListener('click', () => withFamilyAction(async () => {
   const data = await importLocalJournal();
-  updateShells(data.shells);
+  updateEconomy(data);
   refreshCurrentView(false);
-  return '这台设备的题目和贝壳已加入家庭账号。';
+  return data.skippedWardrobeItems?.length
+    ? '题目和贝壳已同步，部分装扮需要足够的贝壳才能加入衣橱。'
+    : '这台设备的题目、贝壳和装扮已加入家庭账号。';
 }));
 byId('family-logout').addEventListener('click', () => withFamilyAction(async () => {
   await signOut();
@@ -805,10 +939,11 @@ byId('family-logout').addEventListener('click', () => withFamilyAction(async () 
 async function refreshCurrentView(refresh = true) {
   if (view === 'history') return refreshHistory(refresh);
   if (view === 'reef') return refreshReef();
+  if (view === 'practice') return refreshPractice();
   if (!entry) return refreshHome();
   try {
     const data = await loadJournal({ refresh });
-    updateShells(data.shells);
+    updateEconomy(data);
     if (!data.family || busy || voice.recordingButton) return;
     const fresh = data.entries.find((item) => item.id === entry?.id);
     if (!fresh || fresh.revision === entry.revision) return;

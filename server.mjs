@@ -3,6 +3,7 @@ import { createCipheriv, createDecipheriv, createHmac, randomBytes, randomUUID }
 import { readFile } from 'node:fs/promises';
 import { createFamilyHandler } from './accounts.mjs';
 import { createChallenge, getChallengeGuide } from './challenge.mjs';
+import { createPracticeSet } from './practice.mjs';
 import { getGuide, guidedCheckForm, guidedHintLadder } from './guides.mjs';
 import { audience, findsGivenNumber, grader, hintReviewer, hintWriter, knownFinalIsCorrect, permitsCompletion, repeatsProblemFacts, reviewer, rotatingHint, teachingGuide, tooAdvanced, writer } from './tutor.mjs';
 
@@ -115,11 +116,11 @@ function verifyCompletion(token) {
 }
 
 function practiceDetails(state, solved = false) {
-  const { entryId, parentId, legacyParentProblem, problem } = state;
+  const { entryId, parentId, activityId, activityIndex, legacyParentProblem, problem } = state;
   return {
-    entryId, parentId, challenge: Boolean(parentId),
+    entryId, parentId, activityId, activityIndex, challenge: Boolean(parentId),
     completionToken: solved && validEntryId(entryId)
-      ? encode({ kind: 'completion', entryId, parentId, legacyParentProblem, problem }) : undefined,
+      ? encode({ kind: 'completion', entryId, parentId, activityId, activityIndex, legacyParentProblem, problem }) : undefined,
   };
 }
 
@@ -272,6 +273,56 @@ async function openChallenge(req, body) {
   }
 }
 
+async function openActivity(req, body) {
+  if (!validEntryId(body.parentId)) throw fail(422, '请先打开一道原题。');
+  let source;
+  if (body.token) {
+    try {
+      const state = decode(body.token);
+      if ((!state.entryId || state.entryId === body.parentId) && !state.parentId) source = { problem: state.problem };
+    } catch {}
+  }
+  source ||= await challengeSource(req, body);
+  if (!source) throw fail(422, '先从题目本打开一道原题，再来三题闯关。');
+  const parentId = body.parentId;
+  const activityId = challengeEntryId('activity:' + parentId);
+  const cacheKey = JSON.stringify(['activity', parentId, source.problem]);
+  const cached = challengeStarts.get(cacheKey);
+  if (cached?.expires > Date.now()) return cached.starting;
+  const starting = (async () => {
+    let generator;
+    if (modelKey) {
+      try {
+        budget(req);
+        active++;
+        generator = (prompt, input, tokens, temperature) => ask(prompt, input, tokens, temperature, auxiliaryModel, 7_000);
+      } catch (error) {
+        if (error.status !== 429) throw error;
+      }
+    }
+    let practice;
+    try {
+      practice = await createPracticeSet(source.problem, generator, { variant: parseInt(activityId.slice(0, 8), 16) });
+    } finally {
+      if (generator) active--;
+    }
+    if (!practice) throw fail(503, '鱼渔还在准备这组三道题，等一会儿再试试。');
+    const questions = await Promise.all(practice.problems.map((exercise, activityIndex) => coach(req, 'start', {}, {
+      ...exercise, parentId, activityId, activityIndex, legacyParentProblem: source.problem,
+      entryId: challengeEntryId('activity:' + parentId + ':' + activityIndex),
+    })));
+    return { activityId, parentId, questions };
+  })();
+  if (challengeStarts.size >= 256) challengeStarts.delete(challengeStarts.keys().next().value);
+  challengeStarts.set(cacheKey, { starting, expires: Date.now() + 86400_000 });
+  try {
+    return await starting;
+  } catch (error) {
+    if (challengeStarts.get(cacheKey)?.starting === starting) challengeStarts.delete(cacheKey);
+    throw error;
+  }
+}
+
 async function contextualHint(req, state, step, previousHints, level) {
   if (!modelKey || state.exampleId) return '';
   let counted = false;
@@ -338,6 +389,7 @@ async function coach(req, action, body, challenge) {
     ? { expires: Date.now() + ttl, problem: exampleId ? examples[exampleId].problem : problem, exampleId,
         entryId: challenge?.entryId || (validEntryId(body.entryId) ? body.entryId : randomUUID()), parentId: challenge?.parentId,
         legacyParentProblem: challenge?.legacyParentProblem,
+        activityId: challenge?.activityId, activityIndex: challenge?.activityIndex,
         method: challenge?.method, practice: Boolean(worksheet), stage: 0, turns: [], count: 0 }
     : decode(body.token);
   state.entryId ||= validEntryId(body.entryId) ? body.entryId : randomUUID();
@@ -673,10 +725,14 @@ const files = {
   '/voice.js': ['voice.js', 'text/javascript; charset=utf-8'],
   '/journal.js': ['journal.js', 'text/javascript; charset=utf-8'],
   '/crop.js': ['crop.js', 'text/javascript; charset=utf-8'],
+  '/wardrobe.js': ['wardrobe.js', 'text/javascript; charset=utf-8'],
+  '/wardrobe-catalog.mjs': ['wardrobe-catalog.mjs', 'text/javascript; charset=utf-8'],
+  '/avatar-fish.png': ['avatar-fish.png', 'image/png'],
+  '/practice.js': ['practice.js', 'text/javascript; charset=utf-8'],
   '/mascot.webp': ['mascot.webp', 'image/webp'],
   '/fish-icon.png': ['fish-icon.png', 'image/png'],
 };
-const apiActions = new Set(['start', 'hint', 'attempt', 'challenge', 'transcribe', 'dictation', 'speak']);
+const apiActions = new Set(['start', 'hint', 'attempt', 'challenge', 'activity', 'transcribe', 'dictation', 'speak']);
 const json = (res, status, payload) => {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(payload));
@@ -695,6 +751,7 @@ const server = http.createServer(async (req, res) => {
       return res.end(req.method === 'HEAD' ? undefined : content);
     }
     if (req.method === 'GET' && path === '/api/health') return json(res, 200, { status: 'ok' });
+    if (req.method === 'GET' && path === '/api/leaderboard') return json(res, 200, await family.leaderboard(req));
     const action = path.startsWith('/api/') ? path.slice(5) : '';
     if (action.startsWith('family/')) return await family(req, res, action.slice(7), readJson, json);
     if (req.method !== 'POST' || !apiActions.has(action)) return json(res, 404, { error: '这条小路还没开放。' });
@@ -704,6 +761,7 @@ const server = http.createServer(async (req, res) => {
     if (action === 'dictation') return json(res, 200, await dictation(req, body));
     if (action === 'transcribe') return json(res, 200, await transcribe(req, body));
     if (action === 'challenge') return json(res, 200, await openChallenge(req, body));
+    if (action === 'activity') return json(res, 200, await openActivity(req, body));
     return json(res, 200, await coach(req, action, body));
   } catch (error) {
     if (!error.status) console.error('Request failed:', error.name);

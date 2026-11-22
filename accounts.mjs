@@ -2,6 +2,7 @@ import { createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import { mkdir, open, readFile, readdir, rename, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { WARDROBE_ITEMS, WARDROBE_SLOTS, normalizeWardrobe, wardrobeSpent } from './public/wardrobe-catalog.mjs';
 
 const derive = promisify(scrypt);
 const cookieName = 'yuyu_family';
@@ -83,6 +84,14 @@ function normalizeEntry(candidate, id, revision, now, imported = false) {
     }
     entry.parentId = candidate.parentId;
   }
+  if (candidate.activityId != null || candidate.activityIndex != null) {
+    if (!entry.parentId || !idPattern.test(candidate.activityId ?? '') ||
+        !Number.isInteger(candidate.activityIndex) || candidate.activityIndex < 0 || candidate.activityIndex > 2) {
+      throw failure(400, '这道练习的活动编号不完整。');
+    }
+    entry.activityId = candidate.activityId;
+    entry.activityIndex = candidate.activityIndex;
+  }
   if (candidate.challenge === true || entry.parentId) entry.challenge = true;
   return entry;
 }
@@ -99,14 +108,54 @@ function markChallenge(entry, prior, verifyCompletion) {
     entry.challenge = true;
     entry.parentId = prior?.parentId || entry.parentId || proof?.parentId;
   }
+  if (prior?.activityId || proof?.activityId) {
+    entry.activityId = prior?.activityId || proof.activityId;
+    entry.activityIndex = prior?.activityIndex ?? proof.activityIndex;
+  }
 }
 
 function snapshot(journal) {
+  const wardrobe = normalizeWardrobe(journal.wardrobe);
+  const solvedCount = Object.keys(journal.awards).length;
+  const earnedShells = journal.legacyShells + solvedCount + Object.keys(journal.activityBonuses || {}).length * 2;
   return {
     entries: Object.values(journal.entries),
-    shells: journal.legacyShells + Object.keys(journal.awards).length,
+    shells: Math.max(0, earnedShells - wardrobeSpent(wardrobe)),
+    earnedShells,
+    solvedCount,
+    awardedActivityIds: Object.values(journal.activityBonuses || {}),
+    wardrobe,
     revision: journal.revision,
   };
+}
+
+function importWardrobe(journal, source) {
+  const requested = normalizeWardrobe(source);
+  const current = normalizeWardrobe(journal.wardrobe);
+  const skipped = [];
+  let balance = snapshot(journal).shells;
+  let changed = false;
+  for (const item of WARDROBE_ITEMS) {
+    if (!requested.owned.includes(item.id) || current.owned.includes(item.id)) continue;
+    if (item.price > balance) {
+      skipped.push(item.id);
+      continue;
+    }
+    current.owned.push(item.id);
+    balance -= item.price;
+    changed = true;
+  }
+  for (const { id: slot } of WARDROBE_SLOTS) {
+    const itemId = requested.equipped[slot];
+    if (!itemId || !current.owned.includes(itemId) || current.equipped[slot] === itemId) continue;
+    current.equipped[slot] = itemId;
+    changed = true;
+  }
+  if (changed) {
+    current.revision++;
+    journal.wardrobe = current;
+  }
+  return skipped;
 }
 
 function validateChanges(changes) {
@@ -133,12 +182,24 @@ function award(journal, entry, verifyCompletion) {
   if (entry.challenge) {
     const parent = journal.entries[entry.parentId];
     const proof = verifiedCompletion(entry, verifyCompletion);
-    if (!proof?.parentId || proof.parentId !== entry.parentId || !parent?.solved || parent.challenge || parent.parentId) return false;
+    if (!proof?.parentId || proof.parentId !== entry.parentId || !parent || parent.challenge || parent.parentId) return false;
+    if (!entry.activityId && !parent.solved) return false;
     const originalProof = verifiedCompletion(parent, verifyCompletion);
     const verifiedOriginal = originalProof && !originalProof.parentId;
     const verifiedArchive = proof.legacyParentProblem === parent.problem.trim();
-    if (!(verifiedOriginal || verifiedArchive) || journal.challengeAwards?.[parent.id]) return false;
-    (journal.challengeAwards ??= {})[parent.id] = entry.id;
+    if (!(verifiedOriginal || verifiedArchive)) return false;
+    if (entry.activityId) {
+      if (proof.activityId !== entry.activityId || proof.activityIndex !== entry.activityIndex ||
+          !idPattern.test(entry.activityId) || !Number.isInteger(entry.activityIndex) || entry.activityIndex < 0 || entry.activityIndex > 2) return false;
+      const prior = journal.activityAwards?.[parent.id];
+      if (prior && (prior.activityId !== entry.activityId || prior.entries[entry.activityIndex])) return false;
+      const activity = prior || { activityId: entry.activityId, entries: {} };
+      activity.entries[entry.activityIndex] = entry.id;
+      (journal.activityAwards ??= {})[parent.id] = activity;
+    } else {
+      if (proof.activityId || journal.challengeAwards?.[parent.id]) return false;
+      (journal.challengeAwards ??= {})[parent.id] = entry.id;
+    }
   }
   journal.awards[entry.id] = true;
   return true;
@@ -154,13 +215,25 @@ function awardChanges(journal, touched, verifyCompletion) {
   return awarded;
 }
 
+function awardActivityBonuses(journal) {
+  const rewarded = [];
+  for (const [parentId, activity] of Object.entries(journal.activityAwards || {})) {
+    if (journal.activityBonuses?.[parentId] || ![0, 1, 2].every((index) => journal.awards[activity.entries[index]])) continue;
+    (journal.activityBonuses ??= {})[parentId] = activity.activityId;
+    rewarded.push(parentId);
+  }
+  return rewarded;
+}
+
 function importDevice(journal, migration, now, touched, verifyCompletion) {
   if (!migration) return false;
   if (!isObject(migration) || !idPattern.test(migration.deviceId ?? '') ||
       !Array.isArray(migration.entries) || migration.entries.length > recordLimit ||
       !Number.isSafeInteger(migration.shells) || migration.shells < 0 || migration.shells > 100_000 ||
       (migration.challengeShells != null && (!Number.isSafeInteger(migration.challengeShells) ||
-        migration.challengeShells < 0 || migration.challengeShells > migration.shells))) {
+        migration.challengeShells < 0 || migration.challengeShells > migration.shells)) ||
+      (migration.activityBonusShells != null && (!Number.isSafeInteger(migration.activityBonusShells) ||
+        migration.activityBonusShells < 0 || migration.activityBonusShells > migration.shells || migration.activityBonusShells % 2))) {
     throw failure(400, '这台设备的旧记录格式不对，暂时无法导入。');
   }
   if (journal.devices[migration.deviceId]) return false;
@@ -168,6 +241,7 @@ function importDevice(journal, migration, now, touched, verifyCompletion) {
   const imported = new Set();
   let originalSolved = 0;
   let challengesSolved = 0;
+  const activities = new Map();
   for (const source of migration.entries) {
     if (!isObject(source) || !idPattern.test(source.id ?? '') || imported.has(source.id)) {
       throw failure(400, '有一道旧题读不出来，请检查题目本。');
@@ -178,6 +252,14 @@ function importDevice(journal, migration, now, touched, verifyCompletion) {
     if (entry.solved) {
       if (entry.challenge) challengesSolved++;
       else originalSolved++;
+      if (entry.activityId) {
+        const proof = verifiedCompletion(entry, verifyCompletion);
+        if (proof?.activityId === entry.activityId && proof.activityIndex === entry.activityIndex && proof.parentId === entry.parentId) {
+          const key = entry.parentId + '/' + entry.activityId;
+          if (!activities.has(key)) activities.set(key, new Set());
+          activities.get(key).add(entry.activityIndex);
+        }
+      }
     }
     if (journal.entries[entry.id] || journal.deleted[entry.id]) continue;
     journal.entries[entry.id] = entry;
@@ -186,7 +268,9 @@ function importDevice(journal, migration, now, touched, verifyCompletion) {
   // Only ordinary historical shells may enter anonymously. Bonuses are verified
   // and deduplicated by their original question when awarded.
   const bonuses = Math.max(migration.challengeShells || 0, challengesSolved);
-  journal.legacyShells = Math.max(journal.legacyShells, migration.shells - originalSolved - bonuses);
+  const completedActivities = [...activities.values()].filter((indices) => [0, 1, 2].every((index) => indices.has(index))).length;
+  const activityBonusShells = Math.max(migration.activityBonusShells || 0, completedActivities * 2);
+  journal.legacyShells = Math.max(journal.legacyShells, migration.shells - originalSolved - bonuses - activityBonusShells);
   journal.devices[migration.deviceId] = true;
   return true;
 }
@@ -222,6 +306,9 @@ export function createFamilyHandler({
   let active = 0;
   let familyCount;
   let ready;
+  let leaderboardCache;
+  let leaderboardTask;
+  let leaderboardVersion = 0;
 
   async function lock(id, task) {
     const previous = locks.get(id) || Promise.resolve();
@@ -263,6 +350,8 @@ export function createFamilyHandler({
         await writer.close();
       }
       await rename(temporary, file);
+      leaderboardVersion++;
+      leaderboardCache = undefined;
     } finally {
       await unlink(temporary).catch(() => {});
     }
@@ -368,16 +457,58 @@ export function createFamilyHandler({
     }
     const migrated = importDevice(journal, body.migration, now, touched, verifyCompletion);
     const awarded = awardChanges(journal, touched, verifyCompletion);
+    const activityBonusAwarded = awardActivityBonuses(journal);
+    const skippedWardrobeItems = migrated ? importWardrobe(journal, body.migration.wardrobe) : [];
     if (changes.length || migrated) {
       journal.revision++;
       await write(id, family);
     }
-    return json(res, 200, { ...snapshot(journal), awarded });
+    return json(res, 200, { ...snapshot(journal), awarded, activityBonusAwarded, skippedWardrobeItems });
+  }
+
+  async function purchase(id, family, body, res, json) {
+    const item = WARDROBE_ITEMS.find((item) => item.id === body.itemId);
+    if (!item) throw failure(400, '这个道具还没上架。');
+    const journal = family.journal;
+    const current = snapshot(journal);
+    const wardrobe = current.wardrobe;
+    const purchased = !wardrobe.owned.includes(item.id);
+    if (purchased && current.shells < item.price) {
+      return json(res, 409, { ...current, error: `还差 ${item.price - current.shells} 枚贝壳，解开几道题再来吧。` });
+    }
+    if (purchased || wardrobe.equipped[item.slot] !== item.id) {
+      if (purchased) wardrobe.owned.push(item.id);
+      wardrobe.equipped[item.slot] = item.id;
+      wardrobe.revision++;
+      journal.wardrobe = wardrobe;
+      journal.revision++;
+      await write(id, family);
+    }
+    return json(res, 200, { ...snapshot(journal), purchased });
+  }
+
+  async function equip(id, family, body, res, json) {
+    if (!WARDROBE_SLOTS.some((slot) => slot.id === body.slot)) throw failure(400, '这个位置戴不了道具。');
+    const journal = family.journal;
+    const current = snapshot(journal);
+    const itemId = body.itemId;
+    if (itemId !== null) {
+      const item = WARDROBE_ITEMS.find((item) => item.id === itemId && item.slot === body.slot);
+      if (!item || !current.wardrobe.owned.includes(itemId)) throw failure(409, '先兑换这个道具，就能给小鱼戴上。');
+    }
+    if (current.wardrobe.equipped[body.slot] === itemId) return json(res, 200, current);
+    const wardrobe = current.wardrobe;
+    wardrobe.equipped[body.slot] = itemId;
+    wardrobe.revision++;
+    journal.wardrobe = wardrobe;
+    journal.revision++;
+    await write(id, family);
+    return json(res, 200, snapshot(journal));
   }
 
   async function handleFamily(req, res, action, readJson, json) {
     const isRead = req.method === 'GET' && (action === 'session' || action === 'journal');
-    const isWrite = req.method === 'POST' && ['register', 'login', 'logout', 'sync'].includes(action);
+    const isWrite = req.method === 'POST' && ['register', 'login', 'logout', 'sync', 'purchase', 'equip'].includes(action);
     if (!isRead && !isWrite) throw failure(404, '找不到这个家庭账号操作。');
     if (isWrite && (req.headers['x-yuyu-family'] !== '1' || req.headers['sec-fetch-site'] === 'cross-site' ||
         req.headers['sec-fetch-site'] === 'same-site')) {
@@ -415,6 +546,8 @@ export function createFamilyHandler({
       if (!signedIn) throw failure(401, '请先登录你的家庭账号。');
       checkLimit('journal:' + id, 180, 60_000);
       if (action === 'journal') return json(res, 200, snapshot(family.journal));
+      if (action === 'purchase') return await purchase(id, family, body, res, json);
+      if (action === 'equip') return await equip(id, family, body, res, json);
       return await sync(id, family, body, res, json);
     });
   }
@@ -431,6 +564,59 @@ export function createFamilyHandler({
 
   const handle = (req, res, action, readJson, json) =>
     withCapacity(() => handleFamily(req, res, action, readJson, json));
+
+  async function loadLeaderboard() {
+    if (!directory) return { entries: [], updatedAt: Date.now() };
+    if (leaderboardCache && Date.now() - leaderboardCache.updatedAt < 30_000) return leaderboardCache;
+    if (leaderboardTask) return leaderboardTask;
+    const version = leaderboardVersion;
+    const pending = (async () => {
+      await (ready ||= mkdir(directory, { recursive: true, mode: 0o700 }));
+      const files = (await readdir(directory)).filter((name) => /^[a-f0-9]{64}\.json$/.test(name)).sort();
+      const entries = [];
+      for (const filename of files) {
+        const id = filename.slice(0, -5);
+        const family = await read(id);
+        if (!family?.journal?.awards) continue;
+        entries.push({ id, solvedCount: Object.keys(family.journal.awards).length });
+      }
+      entries.sort((a, b) => b.solvedCount - a.solvedCount || a.id.localeCompare(b.id));
+      return { entries, updatedAt: Date.now() };
+    })();
+    leaderboardTask = pending;
+    try {
+      const result = await pending;
+      if (version === leaderboardVersion) leaderboardCache = result;
+      return result;
+    } finally {
+      if (leaderboardTask === pending) leaderboardTask = undefined;
+    }
+  }
+
+  handle.leaderboard = async (req) => withCapacity(async () => {
+    const ip = req.headers['x-real-ip'] || req.socket.remoteAddress || '';
+    checkLimit('leaderboard:' + ip, 60, 60_000);
+    const cookie = readCookie(req);
+    let currentId;
+    if (directory && cookie) {
+      const [, id, secret] = cookie;
+      const family = await read(id);
+      if (Number(family?.sessions[sha256(secret)]) > Date.now()) currentId = id;
+    }
+    const leaderboard = await loadLeaderboard();
+    const display = (entry, index) => ({
+      rank: index + 1,
+      displayName: '珊瑚小鱼·' + entry.id.slice(0, 6).toUpperCase(),
+      solvedCount: entry.solvedCount,
+      isYou: entry.id === currentId,
+    });
+    const ownIndex = leaderboard.entries.findIndex((entry) => entry.id === currentId);
+    return {
+      leaders: leaderboard.entries.slice(0, 20).map(display),
+      you: ownIndex < 0 ? null : display(leaderboard.entries[ownIndex], ownIndex),
+      updatedAt: leaderboard.updatedAt,
+    };
+  });
 
   handle.completedOriginal = async (req, parentId) => {
     const cookie = readCookie(req);

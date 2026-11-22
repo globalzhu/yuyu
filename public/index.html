@@ -7,8 +7,8 @@
   <meta name="description" content="鱼渔陪你读懂题目，自己找到下一步。">
   <title>鱼渔 · 一小步，也很棒</title>
   <link rel="icon" href="fish-icon.png">
-  <link rel="stylesheet" href="style.css?v=12">
-  <script type="module" src="app.js?v=12"></script>
+  <link rel="stylesheet" href="style.css?v=13">
+  <script type="module" src="app.js?v=13"></script>
 </head>
 <body>
   <header class="top"><div class="wrap top-inner">
@@ -66,7 +66,7 @@
     </section>
 
     <section class="card lesson" id="lesson" aria-labelledby="lesson-title" hidden>
-      <div class="lesson-top"><div class="card-title"><span class="tile mint" aria-hidden="true">🐠</span><div><h2 id="lesson-title" tabindex="-1">一起解题</h2><p id="lesson-subtitle"></p></div></div><div class="lesson-actions"><button id="review-challenge" type="button" class="button secondary" hidden>挑战相似题</button><button id="new-problem" type="button" class="quiet">换一道题</button></div></div>
+      <div class="lesson-top"><div class="card-title"><span class="tile mint" aria-hidden="true">🐠</span><div><h2 id="lesson-title" tabindex="-1">一起解题</h2><p id="lesson-subtitle"></p></div></div><div class="lesson-actions"><button id="review-practice" type="button" class="button secondary" hidden>同类三题闯关</button><button id="review-challenge" type="button" class="button secondary" hidden>挑战相似题</button><button id="new-problem" type="button" class="quiet">换一道题</button></div></div>
       <div class="lesson-grid">
         <div class="question-rail">
           <ol class="stages" aria-label="解题进度"><li data-stage="0">读懂题</li><li data-stage="1">找办法</li><li data-stage="2">算一算</li></ol>
@@ -109,6 +109,7 @@
       <div class="completion-reward" id="completion-reward" hidden><span aria-hidden="true">🐚</span> <span id="completion-reward-text"></span></div>
       <p class="completion-unlock" id="completion-unlock" hidden></p>
       <div class="completion-actions">
+        <button id="start-practice" type="button" class="button primary" hidden>三题闯关 →</button>
         <button id="start-challenge" type="button" class="button primary" hidden>挑战相似题 →</button>
         <button id="next-problem" type="button" class="button primary">再来一题 →</button>
         <button id="review-solution" type="button" class="quiet">回看解法</button>
@@ -133,17 +134,24 @@
       <p class="small privacy" id="history-storage">登录家庭账号，换设备也能接着做。</p>
     </section>
 
+    <section id="practice" aria-labelledby="practice-title" hidden>
+      <button type="button" class="quiet practice-back" data-view="study">← 返回解题</button>
+      <div id="practice-panel"></div>
+    </section>
+
     <section id="reef" aria-labelledby="reef-title" hidden>
       <div class="reef-banner">
-        <div><h2 id="reef-title" tabindex="-1">我的贝壳岛</h2><p>解开一道题，收一枚贝壳。<br>攒贝壳，遇见海洋伙伴。</p></div>
+        <div><h2 id="reef-title" tabindex="-1">我的贝壳岛</h2><p>给小鱼换个新造型。<br>做题攒的贝壳，可以换喜欢的装扮。</p><button id="jump-leaderboard" type="button" class="button secondary">看看学习榜 ↓</button></div>
         <div class="reef-art" aria-hidden="true"><span>✧</span>🐚<span>✦</span></div>
       </div>
+      <div id="wardrobe"></div>
       <div class="card reef-details">
         <div class="row-heading"><h3>海洋伙伴图鉴</h3><span id="reef-count" class="shells"></span></div>
         <p id="reef-progress-label"></p>
         <progress id="reef-progress" aria-labelledby="reef-progress-label"></progress>
         <div id="stickers" class="stickers"></div>
       </div>
+      <div id="leaderboard"></div>
     </section>
     <div id="status" class="status" role="status" aria-live="polite"></div>
     <footer><span>🐚 一小步，也很棒</span><button type="button" class="quiet" id="about-button">给家长的话</button></footer>
