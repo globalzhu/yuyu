@@ -1548,3 +1548,16 @@ dialog p {
 .rank-portrait .wardrobe-avatar { width:220px; max-width:none; margin:0; transform:scale(.2); transform-origin:top left; }
 .rank-me { margin-left:.5em; padding:2px 6px; font-size:11px; background:#18684e; color:white; border-radius:8px; }
 #public-nickname { overflow-wrap:anywhere; }
+
+.login-page { min-height:100dvh; display:grid; align-items:center; justify-items:center; padding:24px 12px; background:linear-gradient(155deg,#e8f6ed,#f8f8ec 60%,#fff4df); }
+.login-card { width:min(420px,100%); margin:0; padding:clamp(20px,5vw,34px); background:#fffefa; border:1px solid var(--line); border-radius:24px; box-shadow:var(--shadow); }
+.login-brand { display:flex; align-items:center; gap:8px; font-size:22px; font-weight:800; }
+.login-card h1 { margin:18px 0 4px; font-size:28px; }
+.login-card > p { margin:4px 0 16px; color:var(--muted); }
+.login-card #family-error:empty { display:none; }
+
+.gift-shop { margin-top:18px; padding:22px; }
+.gift-shop h3 { margin:0; }
+.gift-shop details { margin-top:16px; }
+.gift-shop summary { cursor:pointer; font-weight:700; }
+#gift-status:empty { display:none; }

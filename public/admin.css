@@ -18,3 +18,7 @@ input { background:#fff; width:100%; } label { display:block; font-weight:600; m
 .actions { flex-wrap:wrap; gap:6px; } .family .actions { grid-column:1/-1; } .score { font-size:14px; } dialog { color:inherit; width:min(400px,90%); }
 dialog::backdrop { background:#153b3159; } #status { color:#7a492f; }
 @media(max-width:600px) { main { width:94%; margin:18px auto; } .stats { gap:5px; } .stats article { font-size:12px; padding:12px; } .stats strong { font-size:22px; } .panel { padding:15px; } .family { grid-template-columns:1fr; } }
+
+.panel + .panel { margin-top:16px; }
+.family details { grid-column:1/-1; }
+#op-error { color:#8d3d28; }

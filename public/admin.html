@@ -1,7 +1,7 @@
 <!doctype html><html lang="zh-CN"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>鱼渔 · 管理后台</title><link rel="icon" href="fish-icon.png">
-<link rel="stylesheet" href="admin.css?v=1"><script type="module" src="admin.js?v=1"></script>
+<link rel="stylesheet" href="admin.css?v=2"><script type="module" src="admin.js?v=2"></script>
 </head><body>
 <header><div class="brand"><img src="fish-icon.png" alt="">鱼渔 <span>管理后台</span></div><a href="./">返回鱼渔 ↗</a></header>
 <main>
@@ -14,7 +14,9 @@
 <div class="stats"><article>家庭账号<strong id="families-count">—</strong></article><article>累计解开题目<strong id="solved-count">—</strong></article><article>学习榜展示家庭<strong id="visible-count">—</strong></article></div>
 <div class="panel"><div class="heading"><h2>家庭账号管理</h2><button id="refresh">刷新</button></div>
 <label for="search">查找家庭</label><input id="search" type="search" placeholder="输入家庭账号或小鱼昵称">
-<div id="list"></div></div></section>
+<div id="list"></div></div>
+<div class="panel"><div class="heading"><h2>礼物管理</h2><button id="add-gift">添加礼物</button></div><div id="catalog"></div></div>
+<div class="panel"><div class="heading"><h2>兑换记录</h2><select id="order-filter" aria-label="兑换状态"><option value="pending">待发放</option><option value="all">全部记录</option></select></div><div id="orders"></div></div></section>
 <p role="status" id="status"></p>
-</main><dialog id="confirm"><form method="dialog"><h2 id="confirm-title"></h2><p id="confirm-detail"></p><div class="actions"><button value="cancel" autofocus>取消</button><button class="primary" value="yes">确认操作</button></div></form></dialog>
+</main><dialog id="confirm"><form method="dialog"><h2 id="confirm-title"></h2><p id="confirm-detail"></p><div id="op-fields"></div><p id="op-error" role="status"></p><div class="actions"><button value="cancel" formnovalidate autofocus>取消</button><button class="primary" value="yes">确认操作</button></div></form></dialog>
 </body></html>

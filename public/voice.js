@@ -1,8 +1,9 @@
+import { memberFetch } from './member-fetch.js';
 const types = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/ogg;codecs=opus'];
 const maxSeconds = 45;
 
 async function post(action, body, signal) {
-  const response = await fetch('api/' + action, {
+  const response = await memberFetch('api/' + action, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

@@ -7,8 +7,8 @@
   <meta name="description" content="鱼渔陪你读懂题目，自己找到下一步。">
   <title>鱼渔 · 一小步，也很棒</title>
   <link rel="icon" href="fish-icon.png">
-  <link rel="stylesheet" href="style.css?v=15">
-  <script type="module" src="app.js?v=15"></script>
+  <link rel="stylesheet" href="style.css?v=16">
+  <script type="module" src="app.js?v=16"></script>
 </head>
 <body>
   <header class="top"><div class="wrap top-inner">
@@ -144,6 +144,11 @@
         <div><h2 id="reef-title" tabindex="-1">我的贝壳岛</h2><p id="wallet-source">做题攒的贝壳，可以换喜欢的装扮。</p><button id="jump-leaderboard" type="button" class="button secondary">看看学习榜 ↓</button></div>
         <div class="reef-art" aria-hidden="true"><span>✧</span>🐚<span>✦</span></div>
       </div>
+      <section class="card gift-shop">
+        <div class="row-heading"><h3>贝壳礼物铺</h3><span aria-hidden="true">🎁</span></div>
+        <div id="gift-list"></div><details id="gift-records"><summary>我的兑换和赠送记录</summary><div id="gift-history"></div></details>
+        <p id="gift-status" role="status"></p>
+      </section>
       <div id="wardrobe"></div>
       <div class="card reef-details">
         <div class="row-heading"><h3>海洋伙伴图鉴</h3><span id="reef-count" class="shells"></span></div>
@@ -156,6 +161,7 @@
     <div id="status" class="status" role="status" aria-live="polite"></div>
     <footer><span>🐚 一小步，也很棒</span><button type="button" class="quiet" id="about-button">给家长的话</button></footer>
   </main>
+  <dialog id="gift-confirm"><form method="dialog"><h2>兑换这件礼物？</h2><p id="gift-confirm-text"></p><div class="dialog-actions"><button value="cancel" class="button secondary" autofocus>再想想</button><button value="yes" class="button primary">确认兑换</button></div></form></dialog>
   <dialog id="photo-crop" aria-labelledby="crop-title" aria-describedby="crop-help">
     <div class="row-heading"><h2 id="crop-title">框出要问的题</h2><button id="crop-cancel" type="button" class="quiet">取消</button></div>
     <p id="crop-help">拖动四个角调整范围，按住框内可以移动。</p>
@@ -177,24 +183,8 @@
       <img src="avatar-fish.png" alt="" width="72" height="72">
       <div><small id="account-state">当前身份</small><strong id="family-signed-name">正在确认账号…</strong><span id="family-sync-status" aria-live="polite"></span></div>
     </div>
-    <div id="family-auth" hidden>
-      <div class="family-choices" role="group" aria-label="选择账号操作">
-        <button id="family-login" type="button" aria-pressed="true">登录</button>
-        <button id="family-create" type="button" aria-pressed="false">注册家庭账号</button>
-      </div>
-      <form id="family-form" class="account-form">
-        <label for="family-name">家庭账号名</label>
-        <input id="family-name" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required minlength="4" maxlength="24" pattern="[A-Za-z0-9][A-Za-z0-9_\-]{3,23}">
-        <small id="name-help" hidden>4–24 个字母、数字、下划线或短横线，以字母或数字开头。</small>
-        <div id="recovery-entry" hidden><label for="reset-code">家长保存的找回码</label><input id="reset-code" autocomplete="off" spellcheck="false" maxlength="64"></div>
-        <label for="family-password" id="password-label">密码</label>
-        <input id="family-password" name="password" type="password" autocomplete="current-password" required minlength="8" maxlength="64">
-        <div id="confirm-entry" hidden><label for="confirm-password">再输入一次密码</label><input id="confirm-password" type="password" autocomplete="new-password" maxlength="64"></div>
-        <button id="family-submit" class="button primary" type="submit">登录</button>
-      </form>
-      <button id="forgot-password" type="button" class="account-text">忘记密码？</button>
-    </div>
     <div id="family-signed-in" hidden>
+      <div class="notice" id="archive-area" hidden><p>这台设备保存了旧版题目。可以把解题记录加入当前家庭账号，导入只恢复题目。</p><button id="restore-history" class="button secondary">导入旧题目</button></div>
       <div class="account-row"><span><b>学习榜昵称</b><small id="public-nickname"></small></span><button id="edit-nickname" type="button" class="account-action">修改昵称</button></div>
       <form id="nickname-form" class="account-form account-subpanel" hidden>
         <label for="nickname">给小鱼取个小名</label>
@@ -202,7 +192,6 @@
         <p id="nickname-help">1–16 个字，会和小鱼头像一起展示在学习榜上。请用小名。</p>
         <div class="dialog-actions"><button id="cancel-nickname" type="button" class="account-text">取消</button><button class="button primary">保存昵称</button></div>
       </form>
-      <div id="family-import-area" class="notice" hidden><p>这台设备上还有访客的学习记录。</p><button type="button" id="family-import" class="button secondary">加入这个账号</button></div>
       <div class="account-row"><span><b>学习记录</b><small>题目本、贝壳和装扮</small></span><button type="button" id="family-refresh" class="account-action">同步一下</button></div>
       <div class="account-row"><span><b>登录密码</b><small>由家长管理</small></span><button type="button" id="open-password" class="account-action">修改密码</button></div>
       <div class="account-row"><span><b>家庭找回码</b><small id="recovery-state">忘记密码时用它找回账号</small></span><button type="button" id="open-code" class="account-action">设置找回码</button></div>
@@ -219,7 +208,7 @@
     </div>
     <p id="family-error" role="status" class="status"></p>
   </dialog>
-  <dialog id="about"><form method="dialog"><h2>给家长的话</h2><p>鱼渔用小任务带孩子解题，可以填数字、打字或说一句话。AI 可能读错题或误判，请和孩子一起核对。</p><p>访客的记录存在当前浏览器。登录后，题目、回答、进度和贝壳会保存在家庭账号里。题目、照片、尝试和录音会发给百炼千问生成反馈。</p><div class="dialog-actions"><button id="clear-history" type="button" class="quiet">清空题目本</button><button class="button primary">知道啦</button></div></form></dialog>
+  <dialog id="about"><form method="dialog"><h2>给家长的话</h2><p>鱼渔用小任务带孩子解题，可以填数字、打字或说一句话。AI 可能读错题或误判，请和孩子一起核对。</p><p>登录家庭账号后，题目、回答、进度和贝壳会保存在家庭账号里。题目、照片、尝试和录音会发给百炼千问生成反馈。</p><div class="dialog-actions"><button id="clear-history" type="button" class="quiet">清空题目本</button><button class="button primary">知道啦</button></div></form></dialog>
   <dialog id="delete-history"><form method="dialog"><h2 id="delete-title">删除这道题？</h2><p id="delete-copy"></p><div class="dialog-actions"><button value="cancel" class="button secondary" autofocus>先留着</button><button value="delete" class="button primary">删除记录</button></div></form></dialog>
 </body>
 </html>

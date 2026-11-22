@@ -96,10 +96,10 @@ function unseal(token) {
   return JSON.parse(Buffer.concat([cipher.update(data.subarray(28)), cipher.final()]));
 }
 
-function decode(token) {
+function decode(token, familyId) {
   try {
     const state = unseal(token);
-    if (state.kind || state.expires < Date.now() || state.solved) throw new Error();
+    if ((state.familyId && state.familyId !== familyId) || state.kind || state.expires < Date.now() || state.solved) throw new Error();
     return state;
   } catch {
     throw fail(409, '这道题的会话已结束。点「换一道题」就能重新开始。');
@@ -108,10 +108,10 @@ function decode(token) {
 
 const validEntryId = (value) => typeof value === 'string' && entryIdPattern.test(value);
 
-function verifyCompletion(token) {
+function verifyCompletion(token, familyId) {
   try {
     const proof = unseal(token);
-    return proof.kind === 'completion' && validEntryId(proof.entryId) && typeof proof.problem === 'string' ? proof : null;
+    return (!proof.familyId || proof.familyId === familyId) && proof.kind === 'completion' && validEntryId(proof.entryId) && typeof proof.problem === 'string' ? proof : null;
   } catch {
     return null;
   }
@@ -122,7 +122,7 @@ function practiceDetails(state, solved = false) {
   return {
     entryId, parentId, activityId, activityIndex, challenge: Boolean(parentId),
     completionToken: solved && validEntryId(entryId)
-      ? encode({ kind: 'completion', entryId, parentId, activityId, activityIndex, legacyParentProblem, problem }) : undefined,
+      ? encode({ kind: 'completion', familyId: state.familyId, entryId, parentId, activityId, activityIndex, legacyParentProblem, problem }) : undefined,
   };
 }
 
@@ -222,16 +222,14 @@ async function challengeSource(req, body) {
   const { parentId, token, legacyProblem } = body;
   if (!validEntryId(parentId)) return null;
   if (token != null) {
-    const proof = verifyCompletion(token);
+    const proof = verifyCompletion(token, req.familyId);
     if (proof?.entryId !== parentId || proof.parentId) return null;
     return { problem: proof.problem };
   }
   const problem = text(legacyProblem, 2400);
   if (!problem || typeof legacyProblem !== 'string' || legacyProblem.trim() !== problem) return null;
   const stored = await family.completedOriginal(req, parentId);
-  // Guest archives live on the device. Family archives can be checked against
-  // the stored original here and again before any challenge reward is credited.
-  if (stored === false || (stored && stored.problem.trim() !== problem)) return null;
+  if (!stored || stored.problem.trim() !== problem) return null;
   return { problem, legacyParentProblem: problem };
 }
 
@@ -240,7 +238,7 @@ async function openChallenge(req, body) {
   if (!source) throw fail(422, '先从题目本打开一道已完成的原题，再来挑战相似题。');
   const { parentId } = body;
   const entryId = challengeEntryId(parentId);
-  const cacheKey = JSON.stringify([parentId, source.problem, Boolean(source.legacyParentProblem)]);
+  const cacheKey = JSON.stringify([req.familyId, parentId, source.problem, Boolean(source.legacyParentProblem)]);
   const cached = challengeStarts.get(cacheKey);
   if (cached?.expires > Date.now()) return cached.starting;
   if (cached) challengeStarts.delete(cacheKey);
@@ -280,7 +278,7 @@ async function openActivity(req, body) {
   let source;
   if (body.token) {
     try {
-      const state = decode(body.token);
+      const state = decode(body.token, req.familyId);
       if ((!state.entryId || state.entryId === body.parentId) && !state.parentId) source = { problem: state.problem };
     } catch {}
   }
@@ -288,7 +286,7 @@ async function openActivity(req, body) {
   if (!source) throw fail(422, '先从题目本打开一道原题，再来三题闯关。');
   const parentId = body.parentId;
   const activityId = challengeEntryId('activity:' + parentId);
-  const cacheKey = JSON.stringify(['activity', parentId, source.problem]);
+  const cacheKey = JSON.stringify(['activity', req.familyId, parentId, source.problem]);
   const cached = challengeStarts.get(cacheKey);
   if (cached?.expires > Date.now()) return cached.starting;
   const starting = (async () => {
@@ -393,7 +391,8 @@ async function coach(req, action, body, challenge) {
         legacyParentProblem: challenge?.legacyParentProblem,
         activityId: challenge?.activityId, activityIndex: challenge?.activityIndex,
         method: challenge?.method, practice: Boolean(worksheet), stage: 0, turns: [], count: 0 }
-    : decode(body.token);
+    : decode(body.token, req.familyId);
+  state.familyId = req.familyId;
   state.entryId ||= validEntryId(body.entryId) ? body.entryId : randomUUID();
   const attempt = action === 'attempt' ? text(body.attempt, 1000) : '';
   if (!state.problem || (action === 'attempt' && !attempt)) throw fail(400, '先写一点内容，再请鱼渔来帮忙。');
@@ -726,6 +725,8 @@ const files = {
   '/admin.js': ['admin.js', 'text/javascript; charset=utf-8'],
   '/admin.css': ['admin.css', 'text/css; charset=utf-8'],
   '/style.css': ['style.css', 'text/css; charset=utf-8'],
+  '/login.js': ['login.js', 'text/javascript; charset=utf-8'],
+  '/member-fetch.js': ['member-fetch.js', 'text/javascript; charset=utf-8'],
   '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
   '/voice.js': ['voice.js', 'text/javascript; charset=utf-8'],
   '/journal.js': ['journal.js', 'text/javascript; charset=utf-8'],
@@ -750,9 +751,13 @@ const server = http.createServer(async (req, res) => {
   try {
     const path = new URL(req.url, 'http://localhost').pathname;
     if ((req.method === 'GET' || req.method === 'HEAD') && Object.hasOwn(files, path)) {
-      const [name, contentType] = files[path];
+      let [name, contentType] = files[path];
+      if (path === '/') {
+        res.setHeader('Vary', 'Cookie');
+        if (!await family.sessionId(req)) name = 'login.html';
+      }
       const content = await readFile(new URL('./public/' + name, import.meta.url));
-      res.writeHead(200, { 'Content-Type': contentType, 'Content-Length': content.length, 'Cache-Control': path === '/' || path === '/admin' ? 'no-cache' : 'public, max-age=3600' });
+      res.writeHead(200, { 'Content-Type': contentType, 'Content-Length': content.length, 'Cache-Control': path === '/' || path === '/admin' ? 'private, no-store' : 'public, max-age=3600' });
       return res.end(req.method === 'HEAD' ? undefined : content);
     }
     if (req.method === 'GET' && path === '/api/health') return json(res, 200, { status: 'ok' });
@@ -761,6 +766,8 @@ const server = http.createServer(async (req, res) => {
     if (action.startsWith('admin/')) return await admin(req, res, action.slice(6), readJson, json);
     if (action.startsWith('family/')) return await family(req, res, action.slice(7), readJson, json);
     if (req.method !== 'POST' || !apiActions.has(action)) return json(res, 404, { error: '这条小路还没开放。' });
+    req.familyId = await family.sessionId(req);
+    if (!req.familyId) throw fail(401, '请先登录家庭账号。');
     if (req.headers['sec-fetch-site'] === 'cross-site') throw fail(403, '请从鱼渔页面提交。');
     const body = await readJson(req);
     if (action === 'speak') return await narration(req, res, body);

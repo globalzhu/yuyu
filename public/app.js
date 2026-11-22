@@ -1,5 +1,6 @@
-import { equipItem, verifyFamilySession, saveNickname, managePassword, familyInfo, importLocalJournal, loadJournal, purchaseItem, removeEntries, saveEntry, signIn, signOut } from './journal.js?v=10';
-import { createVoice } from './voice.js?v=5';
+import { memberFetch, reloadAccount } from './member-fetch.js';
+import { equipItem, verifyFamilySession, saveNickname, managePassword, familyInfo, restoreHistory, redeemGift, giftShop, loadJournal, purchaseItem, removeEntries, saveEntry, signOut } from './journal.js?v=11';
+import { createVoice } from './voice.js?v=6';
 import { createPhotoCropper } from './crop.js?v=1';
 import { createWardrobe } from './wardrobe.js?v=2';
 import { emptyWardrobe } from './wardrobe-catalog.mjs?v=1';
@@ -50,7 +51,8 @@ let photoLoading = false;
 let confirming = false;
 let shells = 0;
 let earnedShells = 0;
-let walletOwner = '这台设备的访客';
+let giftSpent = 0;
+let walletOwner = '家庭账号';
 let currentWardrobe = emptyWardrobe();
 let activeActivity;
 let historyFilter = 'all';
@@ -58,7 +60,6 @@ let deleteTarget;
 let loadVersion = 0;
 let latestUnfinished;
 let reviewingSolution = false;
-let familyMode = 'login';
 let familyName = '';
 let familyBusy = false;
 const photoCropper = createPhotoCropper();
@@ -80,6 +81,7 @@ const wardrobeUI = createWardrobe({
     const data = await purchaseItem(itemId);
     updateEconomy(data);
     renderReef();
+    refreshGifts();
     if (familyName) refreshLeaderboard();
     return data;
   },
@@ -137,7 +139,7 @@ function report(message, near) {
 }
 
 async function request(action, data) {
-  const response = await fetch('api/' + action, {
+  const response = await memberFetch('api/' + action, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
@@ -395,6 +397,7 @@ function canStartPractice(item) {
 
 function updateEconomy(data) {
   shells = data.shells;
+  giftSpent = data.giftSpent ?? giftSpent;
   earnedShells = data.earnedShells ?? data.shells;
   currentWardrobe = data.wardrobe || currentWardrobe;
   byId('shell-count').textContent = shells;
@@ -626,7 +629,7 @@ async function refreshPractice() {
 }
 
 async function fetchLeaderboard() {
-  const response = await fetch('api/leaderboard', { cache: 'no-store' });
+  const response = await memberFetch('api/leaderboard', { cache: 'no-store' });
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || '学习榜暂时没打开，稍后再刷新吧。');
   return result;
@@ -723,12 +726,10 @@ async function refreshHistory(refresh = true) {
   const empty = byId('history-empty');
   try {
     const data = await loadJournal({ refresh });
-    const { entries, local, family } = data;
+    const { entries, local } = data;
     if (version !== loadVersion || view !== 'history') return;
     updateEconomy(data);
-    byId('history-storage').textContent = family
-      ? '题目本会跟着家庭账号同步。'
-      : '访客记录存在当前浏览器，登录家庭账号后可以带到其他设备。';
+    byId('history-storage').textContent = '题目本会跟着家庭账号同步。';
     list.replaceChildren();
     const query = byId('history-search').value.trim().toLowerCase();
     const filtered = entries.filter((item) => {
@@ -812,7 +813,7 @@ byId('delete-history').addEventListener('close', async (event) => {
 });
 
 function renderReef() {
-  byId('wallet-source').textContent = walletOwner + '累计获得 ' + earnedShells + ' 枚贝壳，兑换装扮用了 ' + (earnedShells - shells) + ' 枚。';
+  byId('wallet-source').textContent = walletOwner + '累计获得 ' + earnedShells + ' 枚贝壳，装扮用了 ' + (earnedShells - shells - giftSpent) + ' 枚，礼物用了 ' + giftSpent + ' 枚。';
   byId('reef-count').textContent = '累计获得 ' + earnedShells + ' 枚';
   const next = rewardLevels.find((level) => level.goal > earnedShells);
   byId('reef-progress-label').textContent = next
@@ -834,13 +835,63 @@ function renderReef() {
   }
 }
 
+let selectedGift;
+let ordering = false;
+const giftRequests = new Map();
+async function refreshGifts() {
+  try {
+    const data = await giftShop();
+    const list = byId('gift-list');
+    list.replaceChildren();
+    if (!data.gifts.length) list.append(node('p', 'small', '还没有上架的礼物。'));
+    for (const gift of data.gifts) {
+      const row = node('div', 'account-row');
+      const title = node('div', '');
+      title.append(node('b', '', gift.title), node('small', '', gift.price + ' 枚贝壳'));
+      const btn = node('button', 'account-action', shells < gift.price ? '还差 ' + (gift.price - shells) + ' 枚' : '兑换礼物');
+      btn.disabled = ordering || shells < gift.price;
+      btn.onclick = () => {
+        selectedGift = gift;
+        byId('gift-confirm-text').textContent = '用 ' + gift.price + ' 枚贝壳兑换「' + gift.title + '」，还会剩下 ' + (shells - gift.price) + ' 枚。';
+        byId('gift-confirm').returnValue = '';
+        byId('gift-confirm').showModal();
+      };
+      row.append(title, btn); list.append(row);
+    }
+    const history = byId('gift-history');
+    history.replaceChildren();
+    const labels = { pending: '等候发放', delivered: '已发放', refunded: '已退回贝壳' };
+    const lines = [...data.orders.map(o => ({ at:o.at, text:o.title + ' · ' + o.price + ' 枚 · ' + labels[o.status] })),
+      ...data.grants.map(g => ({ at:g.at, text:'收到 ' + g.amount + ' 枚贝壳 · ' + g.reason }))];
+    for (const line of lines.sort((a,b) => b.at-a.at)) history.append(node('p', '', dateLabel.format(line.at) + ' · ' + line.text));
+    if (!lines.length) history.textContent = '还没有记录。';
+    for (const o of data.orders) if (giftRequests.get(o.giftId) === o.id) giftRequests.delete(o.giftId);
+  } catch (error) { byId('gift-status').textContent = error.message; }
+}
+
+byId('gift-confirm').addEventListener('close', async () => {
+  const gift = selectedGift;
+  if (byId('gift-confirm').returnValue !== 'yes' || !gift || ordering) return;
+  ordering = true;
+  const requestId = giftRequests.get(gift.id) || crypto.randomUUID();
+  giftRequests.set(gift.id, requestId);
+  try {
+    const data = await redeemGift({ giftId: gift.id, price: gift.price, requestId });
+    updateEconomy(data);
+    renderReef();
+    byId('gift-status').textContent = '兑换成功！可以在兑换记录里看发放进度。';
+  } catch (error) { byId('gift-status').textContent = error.message; }
+  finally { ordering = false; await refreshGifts(); }
+});
+
 async function refreshReef() {
   try {
     const data = await loadJournal();
     updateEconomy(data);
-    walletOwner = data.family ? '家庭账号 ' + data.family.name : '这台设备的访客';
+    walletOwner = '家庭账号 ' + data.family.name;
   } catch {}
   renderReef();
+  refreshGifts();
   refreshLeaderboard();
 }
 
@@ -849,25 +900,6 @@ byId('clear-history').addEventListener('click', () => {
   byId('about').close();
   askToDelete(null);
 });
-
-function selectFamilyMode(mode) {
-  familyMode = mode;
-  const login = mode === 'login';
-  const recover = mode === 'recover';
-  byId('family-login').setAttribute('aria-pressed', String(login));
-  byId('family-create').setAttribute('aria-pressed', String(mode === 'register'));
-  byId('name-help').hidden = mode !== 'register';
-  byId('recovery-entry').hidden = !recover;
-  byId('reset-code').required = recover;
-  byId('confirm-entry').hidden = login;
-  byId('confirm-password').required = !login;
-  byId('family-password').autocomplete = login ? 'current-password' : 'new-password';
-  byId('family-password').value = byId('confirm-password').value = byId('reset-code').value = '';
-  byId('password-label').textContent = login ? '密码' : '设置新密码（8–64 个字符）';
-  byId('family-submit').textContent = login ? '登录' : recover ? '重设密码并登录' : '注册并登录';
-  byId('forgot-password').textContent = login ? '忘记密码？' : '返回登录';
-  byId('family-error').textContent = recover ? '请输入家长预先保存的找回码。找回码需要事先设置；如果没有保存，可以请家长查看浏览器保存的密码。' : '';
-}
 
 function closeSecurity() {
   byId('nickname-form').hidden = true;
@@ -878,28 +910,24 @@ function closeSecurity() {
 }
 
 async function renderFamily() {
-  const { family, syncState, canImport } = await familyInfo();
+  const { family, syncState, hasArchive } = await familyInfo();
   familyName = family?.name || '';
-  const signedIn = Boolean(family && syncState !== 'expired');
-  const label = syncState === 'expired' ? '请重新登录' : signedIn ? familyName : syncState === 'unknown' ? '身份待确认' : '访客';
-  byId('family-nav-text').textContent = label;
-  byId('family-open').setAttribute('aria-label', '用户中心，' + label);
-  byId('family-open').title = '用户中心 · ' + label;
-  byId('account-state').textContent = signedIn ? '已登录的家庭账号' : '当前身份';
-  byId('family-signed-name').textContent = label;
-  byId('family-auth').hidden = signedIn;
-  byId('family-signed-in').hidden = !signedIn;
-  byId('family-import-area').hidden = !canImport;
-  byId('family-sync-status').textContent = signedIn
-    ? (syncState === 'synced' ? '题目、贝壳和装扮已同步' : '等待联网同步')
-    : syncState === 'expired' ? '请登录以继续同步家庭贝壳。' : syncState === 'unknown' ? '联网后打开用户中心，再确认一次身份。' : '访客的贝壳和题目保存在当前浏览器。';
+  if (!family || syncState === 'expired') {
+    if (syncState !== 'unknown') reloadAccount();
+    return;
+  }
+  byId('family-nav-text').textContent = familyName;
+  byId('family-open').setAttribute('aria-label', '用户中心，' + familyName);
+  byId('family-open').title = '用户中心 · ' + familyName;
+  byId('account-state').textContent = '已登录的家庭账号';
+  byId('family-signed-name').textContent = familyName;
+  byId('family-signed-in').hidden = false;
+  byId('archive-area').hidden = !hasArchive;
+  byId('family-sync-status').textContent = syncState === 'synced' ? '题目、贝壳和装扮已同步' : '等待联网同步';
   byId('public-nickname').textContent = family?.nickname || '';
   byId('recovery-state').textContent = family?.hasRecovery ? '已设置，由家长保管' : '尚未设置，忘记密码时可用';
   byId('open-code').textContent = family?.hasRecovery ? '更换找回码' : '设置找回码';
-  if (syncState === 'expired') {
-    byId('family-name').value = familyName;
-    byId('family-error').textContent = '登录已过期，请重新登录。';
-  }
+
 }
 
 function announceAccountChange() {
@@ -908,12 +936,7 @@ function announceAccountChange() {
 
 async function checkAccount() {
   const changed = await verifyFamilySession();
-  if (changed) {
-    closeSecurity();
-    selectFamilyMode('login');
-    latestUnfinished = activeActivity = null;
-    nextProblem();
-  }
+  if (changed) return reloadAccount();
   await renderFamily();
 }
 
@@ -936,37 +959,15 @@ async function withFamilyAction(task) {
 }
 
 byId('family-open').addEventListener('click', () => {
-  selectFamilyMode('login');
+  byId('family-error').textContent = '';
   byId('family-dialog').showModal();
   withFamilyAction(async () => { await checkAccount(); });
 });
 byId('family-dialog').addEventListener('close', () => {
   closeSecurity();
-  byId('family-form').reset();
 });
 byId('family-dialog').addEventListener('cancel', (event) => {
   if (familyBusy) event.preventDefault();
-});
-byId('family-login').addEventListener('click', () => selectFamilyMode('login'));
-byId('family-create').addEventListener('click', () => selectFamilyMode('register'));
-byId('forgot-password').addEventListener('click', () => selectFamilyMode(familyMode === 'login' ? 'recover' : 'login'));
-byId('family-form').addEventListener('submit', (event) => {
-  event.preventDefault();
-  withFamilyAction(async () => {
-    const previousFamily = familyName;
-    const password = byId('family-password').value;
-    if (familyMode !== 'login' && password !== byId('confirm-password').value) throw new Error('两次输入的密码不同，请再确认一次。');
-    const name = byId('family-name').value.trim().toLowerCase();
-    const data = familyMode === 'recover' ? { name, newPassword: password, code: byId('reset-code').value } : { name, password };
-    const family = await signIn(familyMode, data);
-    byId('family-form').reset();
-    announceAccountChange();
-    if (family.name !== previousFamily) nextProblem();
-    else refreshCurrentView();
-    if (familyMode === 'register') return '账号已创建。请家长设置并保存家庭找回码。';
-    if (familyMode === 'recover') return '密码已重设。旧找回码已用完，请保存一组新的找回码。';
-    return '已登录。';
-  });
 });
 byId('edit-nickname').addEventListener('click', () => {
   closeSecurity();
@@ -1028,28 +1029,20 @@ byId('code-copy').addEventListener('click', async () => {
     byId('family-error').textContent = '请长按或选中找回码，手动复制。';
   }
 });
+byId('restore-history').addEventListener('click', () => withFamilyAction(async () => {
+  const count = await restoreHistory();
+  await refreshCurrentView();
+  return '已导入 ' + count + ' 道旧题。';
+}));
 byId('family-refresh').addEventListener('click', () => withFamilyAction(async () => {
   const data = await loadJournal();
   updateEconomy(data);
   refreshCurrentView(false);
 }));
-byId('family-import').addEventListener('click', () => withFamilyAction(async () => {
-  const data = await importLocalJournal();
-  updateEconomy(data);
-  refreshCurrentView(false);
-  return data.skippedWardrobeItems?.length
-    ? '题目和贝壳已同步，部分装扮需要足够的贝壳才能加入衣橱。'
-    : '这台设备的题目、贝壳和装扮已加入家庭账号。';
-}));
 byId('family-logout').addEventListener('click', () => withFamilyAction(async () => {
   await signOut();
-  closeSecurity();
   announceAccountChange();
-  latestUnfinished = activeActivity = null;
-  byId('family-name').value = '';
-  selectFamilyMode('login');
-  nextProblem();
-  return '已退出家庭账号。';
+  reloadAccount();
 }));
 
 async function refreshCurrentView(refresh = true) {
@@ -1085,8 +1078,9 @@ async function refreshAccountAndView() {
 document.addEventListener('visibilitychange', refreshAccountAndView);
 window.addEventListener('online', refreshAccountAndView);
 window.addEventListener('storage', (event) => {
-  if (event.key === 'yuyu-account-change') refreshAccountAndView();
+  if (event.key === 'yuyu-account-change') reloadAccount();
 });
+window.addEventListener('pageshow', event => { if (event.persisted) reloadAccount(); });
 window.addEventListener('pagehide', () => {
   voice.cancelRecord();
   voice.stopReading();

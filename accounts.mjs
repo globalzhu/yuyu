@@ -29,7 +29,7 @@ function normalizeCredentials(body, registering) {
   if (typeof password !== 'string' || password.length < 8 || password.length > 64 || Buffer.byteLength(password) > 128) {
     throw failure(400, registering ? '请设置 8–64 个字符的密码。' : '请检查家庭账号和密码。');
   }
-  return { name, password, id: sha256(name) };
+  return { name, password };
 }
 
 function validateText(value, max, fallback) {
@@ -117,45 +117,19 @@ function markChallenge(entry, prior, verifyCompletion) {
 function snapshot(journal) {
   const wardrobe = normalizeWardrobe(journal.wardrobe);
   const solvedCount = Object.keys(journal.awards).length;
-  const earnedShells = journal.legacyShells + solvedCount + Object.keys(journal.activityBonuses || {}).length * 2;
+  const grants = journal.grants || [];
+  const giftSpent = (journal.orders || []).reduce((n, order) => n + (order.status === 'refunded' ? 0 : order.price), 0);
+  const earnedShells = grants.reduce((n, grant) => n + grant.amount, 0) + journal.legacyShells + solvedCount + Object.keys(journal.activityBonuses || {}).length * 2;
   return {
     entries: Object.values(journal.entries),
-    shells: Math.max(0, earnedShells - wardrobeSpent(wardrobe)),
+    shells: Math.max(0, earnedShells - wardrobeSpent(wardrobe) - giftSpent),
+    giftSpent,
     earnedShells,
     solvedCount,
     awardedActivityIds: Object.values(journal.activityBonuses || {}),
     wardrobe,
     revision: journal.revision,
   };
-}
-
-function importWardrobe(journal, source) {
-  const requested = normalizeWardrobe(source);
-  const current = normalizeWardrobe(journal.wardrobe);
-  const skipped = [];
-  let balance = snapshot(journal).shells;
-  let changed = false;
-  for (const item of WARDROBE_ITEMS) {
-    if (!requested.owned.includes(item.id) || current.owned.includes(item.id)) continue;
-    if (item.price > balance) {
-      skipped.push(item.id);
-      continue;
-    }
-    current.owned.push(item.id);
-    balance -= item.price;
-    changed = true;
-  }
-  for (const { id: slot } of WARDROBE_SLOTS) {
-    const itemId = requested.equipped[slot];
-    if (!itemId || !current.owned.includes(itemId) || current.equipped[slot] === itemId) continue;
-    current.equipped[slot] = itemId;
-    changed = true;
-  }
-  if (changed) {
-    current.revision++;
-    journal.wardrobe = current;
-  }
-  return skipped;
 }
 
 function validateChanges(changes) {
@@ -179,10 +153,11 @@ function conflictsFor(journal, changes) {
 
 function award(journal, entry, verifyCompletion) {
   if (!entry.solved || journal.awards[entry.id]) return false;
+  const proof = verifiedCompletion(entry, verifyCompletion);
+  if (!proof) return false;
   if (entry.challenge) {
     const parent = journal.entries[entry.parentId];
-    const proof = verifiedCompletion(entry, verifyCompletion);
-    if (!proof?.parentId || proof.parentId !== entry.parentId || !parent || parent.challenge || parent.parentId) return false;
+    if (!proof.parentId || proof.parentId !== entry.parentId || !parent || parent.challenge || parent.parentId) return false;
     if (!entry.activityId && !parent.solved) return false;
     const originalProof = verifiedCompletion(parent, verifyCompletion);
     const verifiedOriginal = originalProof && !originalProof.parentId;
@@ -225,62 +200,12 @@ function awardActivityBonuses(journal) {
   return rewarded;
 }
 
-function importDevice(journal, migration, now, touched, verifyCompletion) {
-  if (!migration) return false;
-  if (!isObject(migration) || !idPattern.test(migration.deviceId ?? '') ||
-      !Array.isArray(migration.entries) || migration.entries.length > recordLimit ||
-      !Number.isSafeInteger(migration.shells) || migration.shells < 0 || migration.shells > 100_000 ||
-      (migration.challengeShells != null && (!Number.isSafeInteger(migration.challengeShells) ||
-        migration.challengeShells < 0 || migration.challengeShells > migration.shells)) ||
-      (migration.activityBonusShells != null && (!Number.isSafeInteger(migration.activityBonusShells) ||
-        migration.activityBonusShells < 0 || migration.activityBonusShells > migration.shells || migration.activityBonusShells % 2))) {
-    throw failure(400, '这台设备的旧记录格式不对，暂时无法导入。');
-  }
-  if (journal.devices[migration.deviceId]) return false;
-  if (Object.keys(journal.devices).length >= 200) throw failure(413, '这个家庭已导入太多设备。');
-  const imported = new Set();
-  let originalSolved = 0;
-  let challengesSolved = 0;
-  const activities = new Map();
-  for (const source of migration.entries) {
-    if (!isObject(source) || !idPattern.test(source.id ?? '') || imported.has(source.id)) {
-      throw failure(400, '有一道旧题读不出来，请检查题目本。');
-    }
-    imported.add(source.id);
-    const entry = normalizeEntry(source, source.id, 1, now, true);
-    markChallenge(entry, journal.entries[entry.id], verifyCompletion);
-    if (entry.solved) {
-      if (entry.challenge) challengesSolved++;
-      else originalSolved++;
-      if (entry.activityId) {
-        const proof = verifiedCompletion(entry, verifyCompletion);
-        if (proof?.activityId === entry.activityId && proof.activityIndex === entry.activityIndex && proof.parentId === entry.parentId) {
-          const key = entry.parentId + '/' + entry.activityId;
-          if (!activities.has(key)) activities.set(key, new Set());
-          activities.get(key).add(entry.activityIndex);
-        }
-      }
-    }
-    if (journal.entries[entry.id] || journal.deleted[entry.id]) continue;
-    journal.entries[entry.id] = entry;
-    touched.add(entry.id);
-  }
-  // Only ordinary historical shells may enter anonymously. Bonuses are verified
-  // and deduplicated by their original question when awarded.
-  const bonuses = Math.max(migration.challengeShells || 0, challengesSolved);
-  const completedActivities = [...activities.values()].filter((indices) => [0, 1, 2].every((index) => indices.has(index))).length;
-  const activityBonusShells = Math.max(migration.activityBonusShells || 0, completedActivities * 2);
-  journal.legacyShells = Math.max(journal.legacyShells, migration.shells - originalSolved - bonuses - activityBonusShells);
-  journal.devices[migration.deviceId] = true;
-  return true;
-}
-
 function publicNickname(family, id) {
   return family.nickname || '珊瑚小鱼·' + id.slice(0, 6).toUpperCase();
 }
 
 function sessionProfile(family, id) {
-  return { name: family.name, nickname: publicNickname(family, id), hasRecovery: Boolean(family.recoveryHash) };
+  return { name: family.name, storageName: family.formerNames?.[0] || family.name, nickname: publicNickname(family, id), hasRecovery: Boolean(family.recoveryHash) };
 }
 
 function setCookie(res, token, secure, cookiePath) {
@@ -342,9 +267,27 @@ export function createFamilyHandler({
     }
   }
 
+  // The on-disk identity stays stable when a login name changes. Reserve old
+  // names so that queued work on an older device cannot reach another family.
+  let nameIndex;
+  async function names() {
+    if (!nameIndex) nameIndex = (async () => {
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      const map = new Map();
+      for (const file of await readdir(directory)) {
+        if (!/^[a-f0-9]{64}\.json$/.test(file)) continue;
+        const id = file.slice(0, -5);
+        const family = await read(id);
+        for (const name of [family.name, ...(family.formerNames || [])]) map.set(name, id);
+      }
+      return map;
+    })().catch(error => { nameIndex = undefined; throw error; });
+    return nameIndex;
+  }
+
   async function write(id, family) {
     const data = JSON.stringify(family);
-    if (Buffer.byteLength(data) > journalBytes || Object.keys(family.journal.entries).length > recordLimit) {
+    if (Buffer.byteLength(data) > journalBytes || (family.journal && Object.keys(family.journal.entries).length > recordLimit)) {
       throw failure(413, '家庭题目本空间满了。整理掉几道旧题后，再同步这道题。');
     }
     const file = join(directory, id + '.json');
@@ -400,7 +343,9 @@ export function createFamilyHandler({
 
   async function authenticate(action, req, res, body, json) {
     const ip = req.headers['x-real-ip'] || req.socket.remoteAddress || '';
-    const { id, name, password } = normalizeCredentials(body, action === 'register');
+    const { name, password } = normalizeCredentials(body, action === 'register');
+    const index = await names();
+    const id = index.get(name) || sha256(name);
     checkLimit('auth:' + ip, 20, hour);
     if (action === 'register') {
       checkLimit('register:' + ip, 6, hour);
@@ -417,7 +362,7 @@ export function createFamilyHandler({
     async function openSession() {
       let family = await read(id);
       if (action === 'register') {
-        if (family) throw failure(409, '这个家庭账号已经有人用了，试试换一个。');
+        if (family || index.has(name)) throw failure(409, '这个家庭账号已经有人用了，试试换一个。');
         familyCount ??= (await readdir(directory)).filter((filename) => /^[a-f0-9]{64}\.json$/.test(filename)).length;
         if (familyCount >= familyLimit) throw failure(429, '家庭账号名额已满。');
         const salt = randomBytes(16).toString('hex');
@@ -426,13 +371,13 @@ export function createFamilyHandler({
       } else {
         const expected = Buffer.from(family?.passwordHash ?? '00'.repeat(64), 'hex');
         const supplied = await derivePassword(password, family?.salt ?? dummySalt);
-        if (!timingSafeEqual(expected, supplied) || !family) {
+        if (!timingSafeEqual(expected, supplied) || family?.name !== name) {
           throw failure(401, '家庭账号或密码不对，再看看。');
         }
       }
       const secret = newSession(family);
       await write(id, family);
-      if (action === 'register') familyCount++;
+      if (action === 'register') { familyCount++; index.set(name, id); }
       return { secret, profile: sessionProfile(family, id) };
     }
     const { secret, profile } = action === 'register'
@@ -455,13 +400,14 @@ export function createFamilyHandler({
   }
 
   async function recover(req, body, res, json) {
-    const { id, password } = normalizeCredentials({ name: body.name, password: body.newPassword }, true);
+    const { name, password } = normalizeCredentials({ name: body.name, password: body.newPassword }, true);
+    const id = (await names()).get(name) || sha256(name);
     checkLimit('recover-ip:' + (req.headers['x-real-ip'] || req.socket.remoteAddress), 20, hour);
     checkLimit('recover-account:' + id, 10, hour);
     const code = String(body.code || '').replace(/[\s-]/g, '').toUpperCase();
     return lock(id, async () => {
       const family = await read(id);
-      if (!/^[0-9A-F]{32}$/.test(code) || !family?.recoveryHash ||
+      if (!/^[0-9A-F]{32}$/.test(code) || family?.name !== name || !family.recoveryHash ||
           !timingSafeEqual(Buffer.from(sha256(code), 'hex'), Buffer.from(family.recoveryHash, 'hex'))) {
         throw failure(400, '账号名或找回码不匹配，请核对家长保存的那一组。');
       }
@@ -486,6 +432,7 @@ export function createFamilyHandler({
   }
 
   async function sync(id, family, body, res, json) {
+    if (body.migration) throw failure(400, '访客模式已关闭，请刷新后登录家庭账号。');
     const changes = body.changes ?? [];
     validateChanges(changes);
     const journal = family.journal;
@@ -493,6 +440,7 @@ export function createFamilyHandler({
     if (conflicts.length) {
       return json(res, 409, { error: '另一台设备刚刚更新了这道题，已取回最新记录。', conflicts, ...snapshot(journal) });
     }
+    const verify = token => verifyCompletion(token, id);
     const now = Date.now();
     const touched = new Set();
     for (const change of changes) {
@@ -503,19 +451,17 @@ export function createFamilyHandler({
         continue;
       }
       const entry = normalizeEntry(change.entry, change.id, change.revision + 1, now);
-      markChallenge(entry, journal.entries[change.id], verifyCompletion);
+      markChallenge(entry, journal.entries[change.id], verify);
       journal.entries[change.id] = entry;
       touched.add(entry.id);
     }
-    const migrated = importDevice(journal, body.migration, now, touched, verifyCompletion);
-    const awarded = awardChanges(journal, touched, verifyCompletion);
+    const awarded = awardChanges(journal, touched, verify);
     const activityBonusAwarded = awardActivityBonuses(journal);
-    const skippedWardrobeItems = migrated ? importWardrobe(journal, body.migration.wardrobe) : [];
-    if (changes.length || migrated) {
+    if (changes.length) {
       journal.revision++;
       await write(id, family);
     }
-    return json(res, 200, { ...snapshot(journal), awarded, activityBonusAwarded, skippedWardrobeItems });
+    return json(res, 200, { ...snapshot(journal), awarded, activityBonusAwarded });
   }
 
   async function purchase(id, family, body, res, json) {
@@ -559,8 +505,8 @@ export function createFamilyHandler({
   }
 
   async function handleFamily(req, res, action, readJson, json) {
-    const isRead = req.method === 'GET' && (action === 'session' || action === 'journal');
-    const isWrite = req.method === 'POST' && ['register', 'login', 'logout', 'sync', 'purchase', 'equip', 'password', 'recovery-code', 'recover', 'nickname'].includes(action);
+    const isRead = req.method === 'GET' && (action === 'session' || action === 'journal' || action === 'gifts');
+    const isWrite = req.method === 'POST' && ['register', 'login', 'logout', 'sync', 'purchase', 'equip', 'password', 'recovery-code', 'recover', 'nickname', 'redeem', 'restore-history'].includes(action);
     if (!isRead && !isWrite) throw failure(404, '找不到这个家庭账号操作。');
     if (isWrite && (req.headers['x-yuyu-family'] !== '1' || req.headers['sec-fetch-site'] === 'cross-site' ||
         req.headers['sec-fetch-site'] === 'same-site')) {
@@ -608,6 +554,42 @@ export function createFamilyHandler({
         family.nickname = nickname;
         await write(id, family);
         return json(res, 200, { family: sessionProfile(family, id) });
+      }
+      if (action === 'restore-history') {
+        if (!Array.isArray(body.entries) || body.entries.length > recordLimit) throw failure(400, '旧题目本格式不正确。');
+        const journal = family.journal;
+        const now = Date.now();
+        let restored = 0;
+        for (const source of body.entries) {
+          if (!isObject(source) || !idPattern.test(source.id || '')) throw failure(400, '旧题目编号有误。');
+          if (journal.entries[source.id] || journal.deleted[source.id]) continue;
+          journal.entries[source.id] = normalizeEntry(source, source.id, 1, now, true);
+          restored++;
+        }
+        if (restored) {
+          journal.revision++;
+          await write(id, family);
+        }
+        return json(res, 200, { ...snapshot(journal), restored });
+      }
+      if (action === 'gifts') {
+        const catalog = await readCatalog();
+        return json(res, 200, { gifts: catalog.filter(gift => gift.active), orders: family.journal.orders || [], grants: family.journal.grants || [] });
+      }
+      if (action === 'redeem') {
+        if (!idPattern.test(body.requestId || '')) throw failure(400, '请重新打开礼物。');
+        const orders = (family.journal.orders ??= []);
+        const prior = orders.find(order => order.id === body.requestId);
+        if (prior && (prior.giftId !== body.giftId || prior.price !== body.price)) throw failure(409, '这次兑换请求已经处理，请重新选择礼物。');
+        if (!prior) {
+          const gift = (await readCatalog()).find(item => item.id === body.giftId && item.active);
+          if (!gift || gift.price !== body.price) throw failure(409, '礼物已更新，请刷新后再选。');
+          if (snapshot(family.journal).shells < gift.price) throw failure(409, '贝壳还不够，先攒一攒吧。');
+          orders.push({ id: body.requestId, giftId: gift.id, title: gift.title, price: gift.price, status: 'pending', at: Date.now() });
+          family.journal.revision++;
+          await write(id, family);
+        }
+        return json(res, 200, snapshot(family.journal));
       }
       if (action === 'journal') return json(res, 200, snapshot(family.journal));
       if (action === 'purchase') return await purchase(id, family, body, res, json);
@@ -657,16 +639,20 @@ export function createFamilyHandler({
     }
   }
 
+  async function sessionId(req) {
+    const cookie = readCookie(req);
+    if (!directory || !cookie) return null;
+    const [, id, secret] = cookie;
+    const family = await read(id);
+    return Number(family?.sessions[sha256(secret)]) > Date.now() ? id : null;
+  }
+
+  handle.sessionId = req => withCapacity(() => sessionId(req));
   handle.leaderboard = async (req) => withCapacity(async () => {
+    const currentId = await sessionId(req);
+    if (!currentId) throw failure(401, '请先登录家庭账号。');
     const ip = req.headers['x-real-ip'] || req.socket.remoteAddress || '';
     checkLimit('leaderboard:' + ip, 60, 60_000);
-    const cookie = readCookie(req);
-    let currentId;
-    if (directory && cookie) {
-      const [, id, secret] = cookie;
-      const family = await read(id);
-      if (Number(family?.sessions[sha256(secret)]) > Date.now()) currentId = id;
-    }
     const leaderboard = await loadLeaderboard();
     const display = (entry, index) => ({
       rank: index + 1,
@@ -683,6 +669,22 @@ export function createFamilyHandler({
     };
   });
 
+  async function readCatalog() {
+    return (await read('gift-catalog'))?.gifts || [];
+  }
+  handle.catalog = readCatalog;
+  handle.saveGift = body => lock('gift-catalog', async () => {
+    if (!idPattern.test(body.id || '') || typeof body.title !== 'string' || !body.title.trim() ||
+        body.title.length > 40 || !Number.isSafeInteger(body.price) || body.price < 1 || body.price > 10000 ||
+        typeof body.active !== 'boolean') throw failure(400, '请填写礼物名称和 1–10000 枚的整数价格。');
+    const gifts = await readCatalog();
+    const gift = { id: body.id, title: body.title.trim(), price: body.price, active: body.active };
+    const index = gifts.findIndex(item => item.id === gift.id);
+    if (index >= 0) gifts[index] = gift;
+    else gifts.push(gift);
+    await write('gift-catalog', { gifts });
+    return { ok: true };
+  });
   // These methods are only exposed through the authenticated admin router.
   handle.adminList = () => withCapacity(async () => {
     if (!directory) throw failure(503, '账号服务暂不可用。');
@@ -693,21 +695,63 @@ export function createFamilyHandler({
       const family = await read(id);
       const { shells, solvedCount } = snapshot(family.journal);
       rows.push({ name: family.name, nickname: publicNickname(family, id), customNickname: Boolean(family.nickname),
-        hidden: Boolean(family.hideFromLeaderboard), shells, solvedCount });
+        hidden: Boolean(family.hideFromLeaderboard), shells, solvedCount, orders: family.journal.orders || [], grants: family.journal.grants || [] });
     }
     return rows.sort((a, b) => b.solvedCount - a.solvedCount || a.name.localeCompare(b.name));
   });
   handle.adminModerate = (body) => withCapacity(async () => {
-    if (!namePattern.test(body.name || '') || !['hide', 'show', 'reset-nickname', 'revoke-sessions'].includes(body.operation)) throw failure(400, '请选择账号和管理操作。');
-    const id = sha256(body.name);
-    await lock(id, async () => {
+    const actions = ['hide', 'show', 'reset-nickname', 'revoke-sessions', 'rename', 'reset-password', 'grant', 'deliver', 'refund'];
+    if (!namePattern.test(body.name || '') || !actions.includes(body.operation)) throw failure(400, '请选择账号和管理操作。');
+    const index = await names();
+    const id = index.get(body.name);
+    if (!id) throw failure(404, '找不到这个账号。');
+    const change = () => lock(id, async () => {
       const family = await read(id);
-      if (!family) throw failure(404, '找不到这个家庭账号。');
-      if (body.operation === 'reset-nickname') delete family.nickname;
+      if (family?.name !== body.name) throw failure(409, '账号名已更新，请刷新。');
+      const journal = family.journal;
+      if (body.operation === 'rename') {
+        const name = typeof body.value === 'string' ? body.value.trim().toLowerCase() : '';
+        if (!namePattern.test(name)) throw failure(400, '登录名须为 4–24 个字母、数字、下划线或短横线，以字母或数字开头。');
+        if (index.has(name) && index.get(name) !== id) throw failure(409, '这个登录名已被使用。');
+        if (name === family.name) return;
+        const former = (family.formerNames ??= []);
+        if (!former.includes(family.name)) former.push(family.name);
+        family.name = name;
+        family.sessions = {};
+      } else if (body.operation === 'reset-password') {
+        const { password } = normalizeCredentials({ name: family.name, password: body.value }, true);
+        family.salt = randomBytes(16).toString('hex');
+        family.passwordHash = (await derivePassword(password, family.salt)).toString('hex');
+        family.sessions = {};
+        delete family.recoveryHash;
+      } else if (body.operation === 'grant') {
+        if (!idPattern.test(body.requestId || '') || !Number.isSafeInteger(body.amount) || body.amount < 1 || body.amount > 10000 ||
+            typeof body.reason !== 'string' || !body.reason.trim() || body.reason.length > 80) throw failure(400, '请输入 1–10000 枚贝壳和赠送原因。');
+        const grants = (journal.grants ??= []);
+        const prior = grants.find(grant => grant.id === body.requestId);
+        if (prior) {
+          if (prior.amount !== body.amount || prior.reason !== body.reason.trim()) throw failure(409, '这次赠送已经处理，请刷新记录。');
+          return;
+        }
+        grants.push({ id: body.requestId, amount: body.amount, reason: body.reason.trim(), at: Date.now() });
+        journal.revision++;
+      } else if (body.operation === 'deliver' || body.operation === 'refund') {
+        const order = journal.orders?.find(order => order.id === body.orderId);
+        if (!order) throw failure(404, '未找到兑换记录。');
+        const status = body.operation === 'deliver' ? 'delivered' : 'refunded';
+        if (order.status === status) return;
+        if (order.status !== 'pending') throw failure(409, '这笔兑换已处理，请刷新。');
+        order.status = status;
+        order.updatedAt = Date.now();
+        journal.revision++;
+      } else if (body.operation === 'reset-nickname') delete family.nickname;
       else if (body.operation === 'revoke-sessions') family.sessions = {};
       else family.hideFromLeaderboard = body.operation === 'hide';
       await write(id, family);
+      if (body.operation === 'rename') index.set(family.name, id);
     });
+    if (body.operation === 'rename') await lock('register', change);
+    else await change();
     return { ok: true };
   });
 

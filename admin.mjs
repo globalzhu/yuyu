@@ -57,6 +57,8 @@ export function createAdmin(families, verifier = process.env.YUYU_ADMIN_VERIFIER
       cookie(res, '', 0);
       return json(res, 200, { signedIn: false });
     }
+    if (req.method === 'GET' && action === 'catalog') return json(res, 200, { gifts: await families.catalog() });
+    if (req.method === 'POST' && action === 'gift') return json(res, 200, await families.saveGift(await readJson(req)));
     if (req.method === 'POST' && action === 'moderate') return json(res, 200, await families.adminModerate(await readJson(req)));
     throw fail(404, '未找到这项管理功能。');
   };
