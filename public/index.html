@@ -7,8 +7,8 @@
   <meta name="description" content="鱼渔陪你读懂题目，自己找到下一步。">
   <title>鱼渔 · 一小步，也很棒</title>
   <link rel="icon" href="fish-icon.png">
-  <link rel="stylesheet" href="style.css?v=11">
-  <script type="module" src="app.js?v=11"></script>
+  <link rel="stylesheet" href="style.css?v=12">
+  <script type="module" src="app.js?v=12"></script>
 </head>
 <body>
   <header class="top"><div class="wrap top-inner">
@@ -148,6 +148,21 @@
     <div id="status" class="status" role="status" aria-live="polite"></div>
     <footer><span>🐚 一小步，也很棒</span><button type="button" class="quiet" id="about-button">给家长的话</button></footer>
   </main>
+  <dialog id="photo-crop" aria-labelledby="crop-title" aria-describedby="crop-help">
+    <div class="row-heading"><h2 id="crop-title">框出要问的题</h2><button id="crop-cancel" type="button" class="quiet">取消</button></div>
+    <p id="crop-help">拖动四个角调整范围，按住框内可以移动。</p>
+    <div class="crop-stage" id="crop-stage">
+      <img id="crop-image" alt="刚选的题目照片" draggable="false">
+      <div id="crop-selection" class="crop-selection" tabindex="0" role="group" aria-label="裁剪范围，方向键可以移动">
+        <button type="button" class="crop-handle crop-nw" data-crop-handle="nw" aria-label="左上角，用方向键调整"></button>
+        <button type="button" class="crop-handle crop-ne" data-crop-handle="ne" aria-label="右上角，用方向键调整"></button>
+        <button type="button" class="crop-handle crop-sw" data-crop-handle="sw" aria-label="左下角，用方向键调整"></button>
+        <button type="button" class="crop-handle crop-se" data-crop-handle="se" aria-label="右下角，用方向键调整"></button>
+      </div>
+    </div>
+    <p id="crop-status" role="status" aria-live="polite"></p>
+    <div class="crop-actions"><button id="crop-whole" type="button" class="button secondary">用整张照片</button><button id="crop-confirm" type="button" class="button primary">用框里的题 →</button></div>
+  </dialog>
   <dialog id="family-dialog" aria-labelledby="family-title">
     <div class="row-heading"><h2 id="family-title">家庭账号</h2><form method="dialog"><button class="quiet" aria-label="关闭家庭账号">关闭</button></form></div>
     <p id="family-description">在手机和 iPad 登录同一个账号，题目、进度和贝壳就能一起带过去。</p>

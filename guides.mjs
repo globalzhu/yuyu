@@ -1,5 +1,6 @@
 import { getFirstGuide } from './guides-first.mjs';
 import { getSecondGuide } from './guides-second.mjs';
+import { getThirdGuide } from './guides-third.mjs';
 import { fallbackHint } from './tutor.mjs';
 
 const digits = '零一二三四五六七八九';
@@ -63,7 +64,7 @@ function zeroCountingGuide(problem) {
 }
 
 export function getGuide(problem, version) {
-  return getFirstGuide(problem, version) || getSecondGuide(problem, version) || zeroCountingGuide(problem);
+  return getFirstGuide(problem, version) || getSecondGuide(problem, version) || getThirdGuide(problem, version) || zeroCountingGuide(problem);
 }
 
 function smallerAction(task, choices) {

@@ -38,6 +38,24 @@ function splitReading(value) {
   return parts;
 }
 
+function silentAudio() {
+  const bytes = new Uint8Array(204);
+  const view = new DataView(bytes.buffer);
+  for (const [offset, label] of [[0, 'RIFF'], [8, 'WAVEfmt '], [36, 'data']]) {
+    [...label].forEach((letter, index) => { bytes[offset + index] = letter.charCodeAt(0); });
+  }
+  view.setUint32(4, bytes.length - 8, true);
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, 8000, true);
+  view.setUint32(28, 16000, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  view.setUint32(40, bytes.length - 44, true);
+  return 'data:audio/wav;base64,' + btoa(String.fromCharCode(...bytes));
+}
+
 export function createVoice({ report, recordingChanged, received }) {
   let recording;
   let reading;
@@ -142,39 +160,95 @@ export function createVoice({ report, recordingChanged, received }) {
     reading = null;
     session.controller.abort();
     session.sound?.stop();
+    session.media?.pause();
+    session.finishSound?.();
+    session.media?.removeAttribute('src');
+    if (session.url) URL.revokeObjectURL(session.url);
     session.button.textContent = session.label;
     session.button.setAttribute('aria-pressed', 'false');
+    session.button.removeAttribute('aria-busy');
   }
 
   async function read(button, passage) {
     const same = reading?.button === button;
     stopReading();
     if (same || !passage.trim() || recording) return;
-    const Audio = globalThis.AudioContext || globalThis.webkitAudioContext;
-    if (!Audio) return report('这个浏览器暂时播不了语音。');
+    const AudioContext = globalThis.AudioContext || globalThis.webkitAudioContext;
+    if (!globalThis.Audio && !AudioContext) return report('这个浏览器暂时播不了语音。');
     const session = { button, label: button.textContent.trim(), controller: new AbortController() };
     reading = session;
-    button.textContent = '■ 停止朗读';
+    button.textContent = '正在准备…点此取消';
     button.setAttribute('aria-pressed', 'true');
+    button.setAttribute('aria-busy', 'true');
     try {
-      context ||= new Audio();
-      await context.resume();
+      try {
+        if (navigator.audioSession) navigator.audioSession.type = 'playback';
+      } catch {}
+      // Unlock the media element during the tap. Reusing it after the request
+      // also routes iPhone playback through media audio instead of alert audio.
+      if (globalThis.Audio) {
+        session.media = new globalThis.Audio(silentAudio());
+        session.media.preload = 'auto';
+        session.media.volume = 1;
+        session.media.setAttribute('playsinline', '');
+        session.unlock = session.media.play().catch(() => {});
+      }
+      if (AudioContext) {
+        context ||= new AudioContext();
+        session.resume = context.resume().catch(() => {});
+      }
       for (const part of splitReading(passage)) {
         if (reading !== session) break;
         const response = await post('speak', { text: part }, session.controller.signal);
-        const sound = context.createBufferSource();
-        sound.buffer = await context.decodeAudioData(await response.arrayBuffer());
+        const bytes = await response.arrayBuffer();
         if (reading !== session) break;
-        session.sound = sound;
-        sound.connect(context.destination);
-        await new Promise((resolve) => {
-          sound.onended = resolve;
-          sound.start();
-        });
-        session.sound = null;
+        if (session.media) {
+          await session.unlock;
+          if (reading !== session) break;
+          session.media.pause();
+          session.url = URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' }));
+          session.media.src = session.url;
+          await new Promise((resolve, reject) => {
+            session.finishSound = resolve;
+            session.media.onended = resolve;
+            session.media.onerror = () => reject(new Error('朗读文件没能播放，请再点一次。'));
+            session.media.play().then(() => {
+              if (reading !== session) {
+                session.media.pause();
+                return resolve();
+              }
+              button.textContent = '■ 停止朗读';
+              button.removeAttribute('aria-busy');
+            }).catch(reject);
+          });
+          URL.revokeObjectURL(session.url);
+          session.url = null;
+        } else {
+          await session.resume;
+          const sound = context.createBufferSource();
+          sound.buffer = await context.decodeAudioData(bytes);
+          await context.resume();
+          if (reading !== session) break;
+          if (context.state !== 'running') throw new Error('朗读还没打开，请再点一次播放。');
+          session.sound = sound;
+          sound.connect(context.destination);
+          button.textContent = '■ 停止朗读';
+          button.removeAttribute('aria-busy');
+          await new Promise((resolve) => {
+            session.finishSound = resolve;
+            sound.onended = resolve;
+            sound.start();
+          });
+          session.sound = null;
+        }
+        session.finishSound = null;
       }
     } catch (error) {
-      if (!session.controller.signal.aborted) report('朗读暂时没有播出来。可以再点一次。');
+      if (!session.controller.signal.aborted) {
+        report(error.name === 'NotAllowedError'
+          ? '浏览器还没允许播放声音，请再点一次朗读。'
+          : error.message || '朗读暂时没有播出来。可以再点一次。');
+      }
     } finally {
       if (reading === session) stopReading();
     }

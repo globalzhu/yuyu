@@ -19,9 +19,10 @@ fi
 /opt/yuyu/runtime/node --check "$here/guides.mjs"
 /opt/yuyu/runtime/node --check "$here/guides-first.mjs"
 /opt/yuyu/runtime/node --check "$here/guides-second.mjs"
+/opt/yuyu/runtime/node --check "$here/guides-third.mjs"
 /opt/yuyu/runtime/node --check "$here/challenge.mjs"
 install -m 0644 "$here/server.mjs" "$here/accounts.mjs" "$here/tutor.mjs" "$here/guides.mjs" \
-    "$here/guides-first.mjs" "$here/guides-second.mjs" "$here/challenge.mjs" "$release/"
+    "$here/guides-first.mjs" "$here/guides-second.mjs" "$here/guides-third.mjs" "$here/challenge.mjs" "$release/"
 install -d -m 0755 "$release/public"
 install -m 0644 "$here/public/"* "$release/public/"
 

@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { createFamilyHandler } from './accounts.mjs';
 import { createChallenge, getChallengeGuide } from './challenge.mjs';
 import { getGuide, guidedCheckForm, guidedHintLadder } from './guides.mjs';
-import { audience, findsGivenNumber, grader, hintReviewer, hintWriter, knownFinalIsCorrect, permitsCompletion, reviewer, rotatingHint, teachingGuide, tooAdvanced, writer } from './tutor.mjs';
+import { audience, findsGivenNumber, grader, hintReviewer, hintWriter, knownFinalIsCorrect, permitsCompletion, repeatsProblemFacts, reviewer, rotatingHint, teachingGuide, tooAdvanced, writer } from './tutor.mjs';
 
 const model = process.env.DASHSCOPE_MODEL || 'qwen3-vl-plus';
 const modelKey = process.env.DASHSCOPE_API_KEY;
@@ -66,7 +66,7 @@ const nextTasks = [
 const completed = '你把这道题做出来啦！可以把这次用到的小办法记在心里。';
 const maxTurns = 24;
 const recentHintCount = 5;
-const guideVersion = 3;
+const guideVersion = 4;
 const entryIdPattern = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const challengeStarts = new Map();
 
@@ -336,7 +336,7 @@ async function coach(req, action, body, challenge) {
   if (!state.problem || (action === 'attempt' && !attempt)) throw fail(400, '先写一点内容，再请鱼渔来帮忙。');
   if (!state.exampleId) {
     const version = action === 'start' ? guideVersion : state.guide?.version;
-    if ([1, 2, guideVersion].includes(version)) {
+    if ([1, 2, 3, guideVersion].includes(version)) {
       const guide = getGuide(state.problem, version) || (state.parentId && getChallengeGuide(state.problem));
       if (guide) return guidedReply(req, state, guide, version, action, attempt);
     }
@@ -390,14 +390,16 @@ async function coach(req, action, body, challenge) {
       let check = solved ? {} : await audit(candidate);
       const verified = [...reviewContext.priorAttempts];
       if (partial) verified.push(attempt);
-      const usable = () => check.ok === true && candidate &&
+      const usable = () => check.ok === true && candidate && !repeatsProblemFacts(state.problem, candidate) &&
         usesGivenNumbers(state.problem, (candidate.note || '') + ' ' + candidate.task, verified) &&
         (wrong ? stepId(lastTask) === stepId(candidate.task)
           : !state.turns.some((turn) => stepId(turn.task) === stepId(candidate.task)));
       if (!solved && !usable() && Date.now() - started < 13_000) {
         const repair = {
           ...data,
-          correction: text(check.reason, 120) || (wrong
+          correction: repeatsProblemFacts(state.problem, candidate)
+            ? '这题信息完整。跳过抄姓名、抄数字和复述题意，让孩子直接做第一步有用的比较或计算。'
+            : text(check.reason, 120) || (wrong
             ? '保持同一个任务，只在 note 里指出一个具体的检查办法。'
             : '缩短句子，换一个简单具体的小动作。别重复刚做过的任务。'),
           acknowledgedStep: partial,
@@ -416,7 +418,7 @@ async function coach(req, action, body, challenge) {
         step = { note: completed };
       } else if (usable()) {
         step = candidate;
-        if (action !== 'start' && Number.isInteger(reply.stage)) stage = Math.max(stage, Math.min(2, stage + 1, reply.stage));
+        if (Number.isInteger(reply.stage)) stage = Math.max(stage, Math.min(2, reply.stage));
       }
       if (partial) {
         stage = Math.min(2, Math.max(stage, 1));
@@ -457,9 +459,10 @@ async function guidedReply(req, state, guide, version, action, attempt) {
   const accepted = [...(state.guide?.accepted || [])];
   const current = guide.steps[accepted.length];
   if (!current) throw fail(409, '这道题已经学完。');
-  const advance = action === 'attempt' && current.check(attempt, accepted);
+  const finalAnswer = action === 'attempt' && guide.finalCheck?.(attempt) === true;
+  const advance = action === 'attempt' && (finalAnswer || current.check(attempt, accepted));
   if (advance) accepted.push(attempt.slice(0, 180));
-  const solved = accepted.length === guide.steps.length;
+  const solved = finalAnswer || accepted.length === guide.steps.length;
   const activeStep = guide.steps[accepted.length];
   const part = (value) => typeof value === 'function' ? value(accepted) : value;
   const task = solved ? undefined : part(activeStep.task);
@@ -481,13 +484,13 @@ async function guidedReply(req, state, guide, version, action, attempt) {
     note = await anotherHint(req, activeState, { note: initial, task, format, choices }, hintLevel, hints);
     stepHints = [...stepHints, note].slice(-recentHintCount);
   }
-  const stage = solved ? 2 : Math.min(2, Math.floor(3 * accepted.length / guide.steps.length));
+  const stage = solved ? 2 : activeStep.stage ?? Math.min(2, Math.floor(3 * accepted.length / guide.steps.length));
   const feedback = solved ? 'solved' : advance ? 'correct_step' : action === 'hint' ? 'hint' : action === 'attempt' ? 'try_again' : 'ready';
   const next = { ...state, turns: [], stage, stepHints, expires: Date.now() + ttl, guide: { version, accepted, hintLevel } };
   return {
     problem: state.problem, stage, note, task, format, choices, feedback, solved, hintLevel,
     hasMoreHints: !solved, example: state.practice === true, ...practiceDetails(state, solved),
-    guideProgress: { completed: accepted.length, total: guide.steps.length },
+    guideProgress: { completed: solved ? guide.steps.length : accepted.length, total: guide.steps.length },
     message: [note, task].filter(Boolean).join('\n'),
     token: solved ? null : encode(next),
   };
@@ -558,6 +561,35 @@ async function dictation(req, body) {
   }
 }
 
+function finalizeWave(data) {
+  if (data.length < 44 || data.toString('ascii', 0, 4) !== 'RIFF' ||
+      data.toString('ascii', 8, 12) !== 'WAVE') throw fail(502, '朗读文件没准备好，请再试一次。');
+  const wave = Buffer.from(data);
+  let offset = 12;
+  let hasFormat = false;
+  let hasAudio = false;
+  while (offset + 8 <= wave.length) {
+    const kind = wave.toString('ascii', offset, offset + 4);
+    const length = wave.readUInt32LE(offset + 4);
+    const available = wave.length - offset - 8;
+    if (kind === 'fmt ') hasFormat = length >= 16 && length <= available;
+    if (kind === 'data') {
+      if (!available) throw fail(502, '这段朗读没有声音，请再试一次。');
+      hasAudio = true;
+      // Streaming WAVs may retain a placeholder size after the download ends.
+      if (length > available) {
+        wave.writeUInt32LE(available, offset + 4);
+        break;
+      }
+    }
+    if (length > available) throw fail(502, '朗读文件没准备好，请再试一次。');
+    offset += 8 + length + length % 2;
+  }
+  if (!hasFormat || !hasAudio) throw fail(502, '朗读文件没准备好，请再试一次。');
+  wave.writeUInt32LE(wave.length - 8, 4);
+  return wave;
+}
+
 async function narration(req, res, body) {
   const passage = text(body.text, 400);
   if (!passage || passage.length !== text(body.text, 2400).length) throw fail(400, '这段文字太长了，分成几段再听。');
@@ -585,8 +617,7 @@ async function narration(req, res, body) {
       if (size > 10 * 1024 * 1024) throw fail(502, '这段朗读太长了。');
       parts.push(part);
     }
-    const data = Buffer.concat(parts);
-    if (data.subarray(0, 4).toString() !== 'RIFF') throw fail(502, '朗读暂时打不开。');
+    const data = finalizeWave(Buffer.concat(parts));
     res.writeHead(200, { 'Content-Type': 'audio/wav', 'Content-Length': data.length, 'Cache-Control': 'no-store' });
     res.end(data);
   } finally {
@@ -619,6 +650,7 @@ const files = {
   '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
   '/voice.js': ['voice.js', 'text/javascript; charset=utf-8'],
   '/journal.js': ['journal.js', 'text/javascript; charset=utf-8'],
+  '/crop.js': ['crop.js', 'text/javascript; charset=utf-8'],
   '/mascot.webp': ['mascot.webp', 'image/webp'],
   '/fish-icon.png': ['fish-icon.png', 'image/png'],
 };

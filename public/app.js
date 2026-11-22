@@ -1,5 +1,6 @@
 import { familyInfo, importLocalJournal, loadJournal, removeEntries, saveEntry, signIn, signOut } from './journal.js?v=7';
-import { createVoice } from './voice.js?v=4';
+import { createVoice } from './voice.js?v=5';
+import { createPhotoCropper } from './crop.js?v=1';
 
 const byId = (id) => document.getElementById(id);
 const problem = byId('problem');
@@ -53,6 +54,7 @@ let reviewingSolution = false;
 let familyMode = 'login';
 let familyName = '';
 let familyBusy = false;
+const photoCropper = createPhotoCropper();
 
 const voice = createVoice({
   report,
@@ -146,15 +148,7 @@ async function preparePhoto(file) {
     const picture = new Image();
     picture.src = url;
     await picture.decode();
-    const scale = Math.min(1, 1700 / Math.max(picture.naturalWidth, picture.naturalHeight));
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round(picture.naturalWidth * scale));
-    canvas.height = Math.max(1, Math.round(picture.naturalHeight * scale));
-    const context = canvas.getContext('2d');
-    context.fillStyle = '#fff';
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.drawImage(picture, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL('image/jpeg', 0.85);
+    return await photoCropper.choose(picture);
   } catch {
     throw new Error('这张照片打不开。试试重新拍一张，或选 JPG / PNG 照片。');
   } finally {
@@ -166,17 +160,21 @@ async function selectPhoto(event) {
   const file = event.currentTarget.files[0];
   if (!file) return;
   const version = ++photoVersion;
+  const previous = { image, confirming, buttonText: startButton.textContent };
   photoLoading = true;
-  confirming = false;
-  startButton.textContent = '和鱼渔想一想 →';
-  image = null;
-  byId('photo-preview').hidden = true;
-  byId('photo-thumb').removeAttribute('src');
   updateControls();
   report('正在准备照片…', start);
   try {
     const encoded = await preparePhoto(file);
     if (version !== photoVersion) return;
+    if (!encoded) {
+      image = previous.image;
+      confirming = previous.confirming;
+      startButton.textContent = previous.buttonText;
+      report('', start);
+      return;
+    }
+    confirming = false;
     image = encoded;
     byId('photo-thumb').src = encoded;
     byId('photo-preview').hidden = false;
@@ -184,11 +182,11 @@ async function selectPhoto(event) {
     report('', start);
   } catch (error) {
     if (version !== photoVersion) return;
-    clearPhoto();
     report(error.message, start);
   } finally {
     if (version === photoVersion) {
       photoLoading = false;
+      photoInput.value = cameraInput.value = '';
       updateControls();
     }
   }
