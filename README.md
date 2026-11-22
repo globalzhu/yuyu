@@ -6,7 +6,7 @@
 
 需要 Node.js 20 或更新版本。在此目录运行 `YUYU_STATE_DIRECTORY=./family-data node server.mjs`，打开 `http://127.0.0.1:3731/`。家庭登录 Cookie 要求 HTTPS，浏览器录音也要求安全上下文和麦克风权限。没有百炼密钥时可以使用三道内置练习。
 
-从运行环境注入 `DASHSCOPE_API_KEY` 来启用模型功能。解题默认使用 `qwen3-vl-plus`，可通过 `DASHSCOPE_MODEL` 覆盖。转写使用 `qwen-audio-3.1-asr-flash`，朗读使用 `qwen3-tts-flash`。若使用业务空间专属域名，将该空间的 OpenAI 兼容基础地址设置为 `DASHSCOPE_BASE`，地址不含 `/chat/completions`。
+从运行环境注入 `DASHSCOPE_API_KEY` 来启用模型功能。解题默认使用 `qwen3-vl-plus`，可通过 `DASHSCOPE_MODEL` 覆盖。判题、教学复核、提示和挑战使用 `DASHSCOPE_AUX_MODEL`，默认 `qwen-plus`。全链路使用 Qwen4-Max 时，将这两个变量都设为 `qwen4-max`。转写使用 `qwen-audio-3.1-asr-flash`，朗读使用 `qwen3-tts-flash`。若使用业务空间专属域名，将该空间的 OpenAI 兼容基础地址设置为 `DASHSCOPE_BASE`，地址不含 `/chat/completions`。
 
 ## ECS 部署
 

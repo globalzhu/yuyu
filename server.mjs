@@ -7,6 +7,7 @@ import { getGuide, guidedCheckForm, guidedHintLadder } from './guides.mjs';
 import { audience, findsGivenNumber, grader, hintReviewer, hintWriter, knownFinalIsCorrect, permitsCompletion, repeatsProblemFacts, reviewer, rotatingHint, teachingGuide, tooAdvanced, writer } from './tutor.mjs';
 
 const model = process.env.DASHSCOPE_MODEL || 'qwen3-vl-plus';
+const auxiliaryModel = process.env.DASHSCOPE_AUX_MODEL || 'qwen-plus';
 const modelKey = process.env.DASHSCOPE_API_KEY;
 const base = process.env.DASHSCOPE_BASE || 'https://dashscope.aliyuncs.com/compatible-mode/v1';
 const stateKey = modelKey ? createHmac('sha256', modelKey).update('yuyu-study-state-v2').digest() : randomBytes(32);
@@ -134,11 +135,19 @@ function text(value, length) {
   return typeof value === 'string' ? value.trim().slice(0, length) : '';
 }
 
+const numbersIn = (value) => value.normalize('NFKC').match(/\d+(?:\.\d+)?/g) || [];
+
+function allowedHintNumbers(problem, verified) {
+  if (!numbersIn(problem).length) return null;
+  return [...new Set(['0', '1', '2', '4', '5', '10', '100', '1000', '10000', ...numbersIn([problem, ...verified].join(' '))])];
+}
+
+function unapprovedHintNumbers(message, allowedNumbers) {
+  return allowedNumbers ? [...new Set(numbersIn(message).filter((number) => !allowedNumbers.includes(number)))] : [];
+}
+
 function usesGivenNumbers(problem, message, verified) {
-  const numbers = (value) => value.normalize('NFKC').match(/\d+(?:\.\d+)?/g) || [];
-  if (!numbers(problem).length) return true;
-  const known = new Set(['0', '1', '2', '4', '5', '10', '100', '1000', '10000', ...numbers([problem, ...verified].join(' '))]);
-  return numbers(message).every((number) => known.has(number));
+  return unapprovedHintNumbers(message, allowedHintNumbers(problem, verified)).length === 0;
 }
 
 function stepFrom(reply) {
@@ -239,7 +248,7 @@ async function openChallenge(req, body) {
       try {
         budget(req);
         active++;
-        askChallenge = (prompt, input, tokens, temperature) => ask(prompt, input, tokens, temperature, 'qwen-plus', 7_000);
+        askChallenge = (prompt, input, tokens, temperature) => ask(prompt, input, tokens, temperature, auxiliaryModel, 7_000);
       } catch (error) {
         if (error.status !== 429) throw error;
       }
@@ -277,14 +286,14 @@ async function contextualHint(req, state, step, previousHints, level) {
       previousWork: [...state.turns.filter((turn) => turn.attempt).map(({ attempt, partial }) => ({ attempt, partial })),
         ...(state.guide?.accepted || []).map((attempt) => ({ attempt, partial: true }))],
     };
-    const result = await ask(hintWriter, JSON.stringify(context), 200, 0.15, 'qwen-plus', 4_500);
-    const note = typeof result.note === 'string' ? result.note.trim() : '';
     const known = context.previousWork.filter((turn) => turn.partial).map((turn) => turn.attempt);
+    const result = await ask(hintWriter, JSON.stringify({ ...context, allowedNumbers: allowedHintNumbers(state.problem, known) }), 200, 0.15, auxiliaryModel, 4_500);
+    const note = typeof result.note === 'string' ? result.note.trim() : '';
     const normalized = stepId(note);
     if (!normalized || note.length > 112 || /[?？]/.test(note) || tooAdvanced.test(note) ||
         context.previousHints.some((hint) => stepId(hint) === normalized) || stepId(step.task) === normalized ||
         !usesGivenNumbers(state.problem, note, known)) return '';
-    const review = await ask(hintReviewer, JSON.stringify({ ...context, note }), 90, 0.05, 'qwen-plus', 4_500);
+    const review = await ask(hintReviewer, JSON.stringify({ ...context, note }), 90, 0.05, auxiliaryModel, 4_500);
     return review.ok === true ? note : '';
   } catch (error) {
     if (error.status !== 429) console.error('Progressive hint:', error.status || error.name);
@@ -362,19 +371,21 @@ async function coach(req, action, body, challenge) {
     budget(req);
     active++;
     const lastTask = state.turns.at(-1)?.task;
+    const priorAttempts = state.turns.filter((turn) => turn.partial).map((turn) => turn.attempt);
     const data = {
       action, problem: state.problem, lastTask, turns: state.turns, attempt, stage,
       audience, teachingIdea: state.method || teachingGuide(state.problem),
+      allowedNumbers: allowedHintNumbers(state.problem, priorAttempts),
     };
     try {
       const started = Date.now();
       const reviewContext = {
         action, problem: state.problem, lastTask, attempt,
-        priorAttempts: state.turns.filter((turn) => turn.partial).map((turn) => turn.attempt),
+        priorAttempts,
       };
       const [firstReply, grade] = await Promise.all([
         ask(writer, JSON.stringify(data), 300, 0.15),
-        action === 'attempt' ? ask(grader, JSON.stringify(reviewContext), 120, 0.05, 'qwen-plus') : {},
+        action === 'attempt' ? ask(grader, JSON.stringify(reviewContext), 120, 0.05, auxiliaryModel) : {},
       ]);
       let reply = firstReply;
       let candidate = stepFrom(reply);
@@ -386,26 +397,34 @@ async function coach(req, action, body, challenge) {
       wrong = action === 'attempt' && !solved && !partial && grade.wrong === true;
       const audit = (hint) => hint ? ask(reviewer, JSON.stringify({
         ...reviewContext, partial, wrong, teachingIdea: data.teachingIdea, reply: hint,
-      }), 160, 0.05, 'qwen-plus') : {};
+      }), 160, 0.05, auxiliaryModel) : {};
       let check = solved ? {} : await audit(candidate);
-      const verified = [...reviewContext.priorAttempts];
+      const verified = [...priorAttempts];
       if (partial) verified.push(attempt);
-      const usable = () => check.ok === true && candidate && !repeatsProblemFacts(state.problem, candidate) &&
-        usesGivenNumbers(state.problem, (candidate.note || '') + ' ' + candidate.task, verified) &&
+      const allowedNumbers = allowedHintNumbers(state.problem, verified);
+      const unapproved = () => candidate ? unapprovedHintNumbers(`${candidate.note} ${candidate.task}`, allowedNumbers) : [];
+      const usable = () => check.ok === true && candidate && !unapproved().length &&
+        !repeatsProblemFacts(state.problem, candidate) &&
         (wrong ? stepId(lastTask) === stepId(candidate.task)
           : !state.turns.some((turn) => stepId(turn.task) === stepId(candidate.task)));
       if (!solved && !usable() && Date.now() - started < 13_000) {
+        const rejectedNumbers = unapproved();
+        const correction = repeatsProblemFacts(state.problem, candidate)
+          ? '这题信息完整。跳过抄姓名、抄数字和复述题意，让孩子直接做第一步有用的比较或计算。'
+          : text(check.reason, 120) || (wrong
+          ? '保持同一个任务，只在 note 里指出一个具体的检查办法。'
+          : '缩短句子，换一个简单具体的小动作。别重复刚做过的任务。');
         const repair = {
           ...data,
-          correction: repeatsProblemFacts(state.problem, candidate)
-            ? '这题信息完整。跳过抄姓名、抄数字和复述题意，让孩子直接做第一步有用的比较或计算。'
-            : text(check.reason, 120) || (wrong
-            ? '保持同一个任务，只在 note 里指出一个具体的检查办法。'
-            : '缩短句子，换一个简单具体的小动作。别重复刚做过的任务。'),
+          allowedNumbers,
+          previousReply: candidate,
+          correction: rejectedNumbers.length
+            ? `上一条回复用了未经核对的新数字：${rejectedNumbers.join('、')}。保留解释概念的一句，去掉数值举例。task 只写一个动作，用数位或物品的名称，不写数字，也不代算。${correction}`
+            : correction,
           acknowledgedStep: partial,
         };
         try {
-          reply = await ask(writer, JSON.stringify(repair), 265, 0.25);
+          reply = await ask(writer, JSON.stringify(repair), 265, 0.25, rejectedNumbers.length ? auxiliaryModel : model);
           candidate = stepFrom(reply);
           check = await audit(candidate);
         } catch (error) {
@@ -423,8 +442,11 @@ async function coach(req, action, body, challenge) {
       if (partial) {
         stage = Math.min(2, Math.max(stage, 1));
         if (!step) {
+          const approvedNote = check.ok === true && candidate?.note &&
+            [candidate.note, /^[^。！？]+[。！？]/u.exec(candidate.note)?.[0]]
+              .find((note) => note && !unapprovedHintNumbers(note, allowedNumbers).length);
           step = {
-            note: '这一小步做对了，可以把它留着用。',
+            note: approvedNote || '这一小步做对了，可以把它留着用。',
             task: '把刚得到的线索和题目还要找的内容连起来，写出接下来要做的事。',
             format: 'phrase',
           };
