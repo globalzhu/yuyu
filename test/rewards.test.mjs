@@ -50,3 +50,27 @@ test('grants, purchases, refunds and renames preserve one consistent family bala
   await families.saveGift({...gift, active:false});
   await assert.rejects(call('redeem', {...request,requestId:randomUUID()}), {status:409});
 });
+
+test('shell brooch purchases survive a wardrobe reload and debit the family once', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'yuyu-shell-brooch-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  let families = createFamilyHandler({ directory });
+  let cookie;
+  const name = 'collector';
+  const password = randomUUID();
+  const call = (action, body) => families(
+    { method: body ? 'POST' : 'GET', headers: { cookie, 'x-yuyu-family': '1', 'x-yuyu-family-name': name }, socket: {} },
+    { setHeader(header, value) { if (header === 'Set-Cookie') cookie = value.split(';')[0]; } },
+    action, () => body, (_, status, result) => { assert.equal(status, 200); return result; },
+  );
+  await call('register', { name, password });
+  await families.adminModerate({ name, operation: 'grant', amount: 1, reason: '一起试戴', requestId: randomUUID() });
+  await Promise.all([call('purchase', { itemId: 'peachfan' }), call('purchase', { itemId: 'peachfan' })]);
+  families = createFamilyHandler({ directory });
+  const journal = await call('journal');
+  assert.equal(journal.shells, 0);
+  assert.deepEqual(journal.wardrobe.owned, ['peachfan']);
+  assert.equal(journal.wardrobe.equipped.shell, 'peachfan');
+  assert.equal((await call('equip', { slot: 'shell', itemId: null })).wardrobe.equipped.shell, null);
+  assert.equal((await call('equip', { slot: 'shell', itemId: 'peachfan' })).shells, 0);
+});

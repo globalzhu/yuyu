@@ -1,10 +1,10 @@
 import { memberFetch, reloadAccount } from './member-fetch.js';
-import { equipItem, verifyFamilySession, saveNickname, managePassword, familyInfo, restoreHistory, redeemGift, giftShop, loadJournal, purchaseItem, removeEntries, saveEntry, signOut } from './journal.js?v=11';
+import { equipItem, verifyFamilySession, saveNickname, managePassword, familyInfo, restoreHistory, redeemGift, giftShop, loadJournal, purchaseItem, removeEntries, saveEntry, signOut } from './journal.js?v=12';
 import { createVoice } from './voice.js?v=6';
 import { createPhotoCropper } from './crop.js?v=1';
-import { createWardrobe } from './wardrobe.js?v=2';
-import { emptyWardrobe } from './wardrobe-catalog.mjs?v=1';
-import { createLeaderboard, createPractice } from './practice.js?v=2';
+import { createWardrobe } from './wardrobe.js?v=3';
+import { emptyWardrobe } from './wardrobe-catalog.mjs?v=2';
+import { createLeaderboard, createPractice } from './practice.js?v=3';
 
 const byId = (id) => document.getElementById(id);
 const problem = byId('problem');
@@ -60,6 +60,24 @@ let deleteTarget;
 let loadVersion = 0;
 let latestUnfinished;
 let reviewingSolution = false;
+let stepCursor = null;
+let liveDraft = '';
+let reviewHint;
+
+function shownStep() {
+  return stepCursor ?? ((entry?.turns.length ?? 0) - 1);
+}
+
+function answerSteps() {
+  return (entry?.turns || []).flatMap((turn, index, turns) =>
+    index === turns.length - 1 || turns[index + 1].attempt ? [index] : []);
+}
+
+function latestStep() {
+  stepCursor = null;
+  liveDraft = '';
+  reviewHint = undefined;
+}
 let familyName = '';
 let familyBusy = false;
 const photoCropper = createPhotoCropper();
@@ -110,7 +128,9 @@ function updateControls() {
   const mic = voice.recordingButton;
   const blocked = busy || Boolean(mic);
   startButton.disabled = blocked || photoLoading;
-  photoInput.disabled = cameraInput.disabled = blocked;
+  photoInput.disabled = cameraInput.disabled = byId('paste-photo').disabled = blocked || photoLoading;
+  byId('prev-step').disabled = blocked || answerSteps().indexOf(shownStep()) <= 0;
+  byId('forward-step').disabled = blocked;
   hintButton.disabled = blocked;
   byId('send-attempt').disabled = blocked;
   byId('new-problem').disabled = byId('restart-problem').disabled = busy;
@@ -120,11 +140,13 @@ function updateControls() {
   byId('speak-problem').disabled = busy || photoLoading || Boolean(mic && mic.id !== 'speak-problem') || voice.transcribing;
   byId('speak-attempt').disabled = busy || Boolean(mic && mic.id !== 'speak-attempt') || voice.transcribing;
   problem.readOnly = attempt.readOnly = blocked;
-  for (const button of practice) button.disabled = blocked;
+  for (const button of practice) button.disabled = blocked || photoLoading;
   for (const button of stepChoices.children) button.disabled = blocked;
-  for (const button of navigation) button.disabled = busy;
+  for (const button of navigation) button.disabled = busy || photoLoading;
   for (const button of byId('history-list').querySelectorAll('button')) button.disabled = busy;
-  byId('family-open').disabled = busy;
+  byId('family-open').disabled = busy || photoLoading;
+  byId('continue-button').disabled = busy || photoLoading;
+  byId('remove-photo').disabled = busy || photoLoading;
 }
 
 function report(message, near) {
@@ -195,9 +217,8 @@ async function preparePhoto(file) {
   }
 }
 
-async function selectPhoto(event) {
-  const file = event.currentTarget.files[0];
-  if (!file) return;
+async function selectPhoto(file) {
+  if (!file || busy || photoLoading || voice.recordingButton || start.hidden) return;
   const version = ++photoVersion;
   const previous = { image, confirming, buttonText: startButton.textContent };
   photoLoading = true;
@@ -231,8 +252,89 @@ async function selectPhoto(event) {
   }
 }
 
-photoInput.addEventListener('change', selectPhoto);
-cameraInput.addEventListener('change', selectPhoto);
+for (const input of [photoInput, cameraInput]) {
+  input.addEventListener('change', () => selectPhoto(input.files[0]));
+}
+
+function embeddedPhoto(html) {
+  if (!html || !html.includes('data:image/') || html.length > 49_000_000) return;
+  // Template contents stay inert; only decode embedded raster data copied with the image.
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  for (const img of template.content.querySelectorAll('img[src]')) {
+    const match = /^data:(image\/(?:png|jpeg|webp|gif));base64,([a-z0-9+/=\s]+)$/i.exec(img.getAttribute('src'));
+    if (!match) continue;
+    try {
+      const binary = atob(match[2]);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return new Blob([bytes], { type: match[1] });
+    } catch { continue; }
+  }
+}
+
+function transferredImage(data) {
+  const files = [...(data?.files || [])];
+  for (const item of data?.items || []) {
+    if (item.kind === 'file') files.push(item.getAsFile());
+  }
+  return files.find(file => file?.type.startsWith('image/')) || embeddedPhoto(data?.getData('text/html'));
+}
+
+problem.addEventListener('paste', event => {
+  const file = transferredImage(event.clipboardData);
+  if (!file) return;
+  event.preventDefault();
+  selectPhoto(file);
+});
+
+const problemForm = byId('problem-form');
+problemForm.addEventListener('dragover', event => {
+  if (!event.dataTransfer.types.includes('Files')) return;
+  event.preventDefault();
+  problemForm.classList.add('image-over');
+});
+problemForm.addEventListener('dragleave', event => {
+  if (!problemForm.contains(event.relatedTarget)) problemForm.classList.remove('image-over');
+});
+problemForm.addEventListener('drop', event => {
+  problemForm.classList.remove('image-over');
+  if (!event.dataTransfer.types.includes('Files')) return;
+  event.preventDefault();
+  const file = transferredImage(event.dataTransfer);
+  if (file) selectPhoto(file);
+  else report('请拖一张题目照片进来。', start);
+});
+
+byId('paste-photo').addEventListener('click', async () => {
+  const version = photoVersion;
+  try {
+    if (navigator.clipboard?.read) {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const type = item.types.find(type => type.startsWith('image/'));
+        const file = type ? await item.getType(type) : item.types.includes('text/html')
+          ? embeddedPhoto(await (await item.getType('text/html')).text()) : undefined;
+        if (file) {
+          if (version === photoVersion) await selectPhoto(file);
+          return;
+        }
+      }
+    }
+  } catch { /* The system paste menu can still supply the image. */ }
+  if (start.hidden || version !== photoVersion) return;
+  problem.focus();
+  report('先复制一张照片，再长按输入框选“粘贴”。有键盘也可以按 ⌘V 或 Ctrl+V。', start);
+});
+
+for (const input of [problem, attempt]) {
+  input.addEventListener('keydown', event => {
+    if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey) || event.isComposing) return;
+    event.preventDefault();
+    if (!input.readOnly && !photoLoading) input.form.requestSubmit();
+  });
+}
+
 byId('remove-photo').addEventListener('click', () => {
   if (busy) return;
   clearPhoto();
@@ -264,7 +366,17 @@ function bubble(mine, content) {
 
 function renderLesson(award) {
   if (!entry) return;
-  const last = entry.turns.at(-1);
+  const index = shownStep();
+  const last = reviewHint || entry.turns[index];
+  const steps = answerSteps();
+  const position = steps.indexOf(index) + 1;
+  const reviewing = stepCursor !== null;
+  const stageNumber = last.stage ?? entry.stage;
+  byId('step-nav').hidden = steps.length < 2;
+  byId('prev-step').disabled = busy || position <= 1;
+  byId('forward-step').hidden = !reviewing;
+  byId('step-position').textContent = (reviewing ? '回看第 ' : '第 ') + position + ' 步';
+  byId('send-attempt').textContent = reviewing ? '从这一步继续 →' : '检查这一步 →';
   byId('lesson-title').textContent = entry.solved ? '解法回顾' : '一起解题';
   byId('problem-view').textContent = entry.problem;
   byId('lesson-subtitle').textContent = entry.activityId ? `三题闯关 · 第 ${entry.activityIndex + 1} 题`
@@ -274,29 +386,29 @@ function renderLesson(award) {
   byId('review-practice').hidden = !canStartPractice(entry) && !entry.activityId;
   for (const stage of stages) {
     const i = Number(stage.dataset.stage);
-    stage.classList.toggle('done', entry.solved || i < entry.stage);
-    if (!entry.solved && i === entry.stage) stage.setAttribute('aria-current', 'step');
+    stage.classList.toggle('done', entry.solved || i < stageNumber);
+    if (!entry.solved && i === stageNumber) stage.setAttribute('aria-current', 'step');
     else stage.removeAttribute('aria-current');
   }
   byId('current-step').dataset.feedback = last.feedback || '';
   const hintTitle = last.feedback === 'hint' && last.hintLevel > 0
     ? `第 ${last.hintLevel} 个提示`
     : feedbackTitles[last.feedback];
-  byId('step-title').textContent = entry.solved
+  byId('step-title').textContent = entry.solved && !reviewing
     ? '这道题解开啦'
     : hintTitle || '现在做这一步';
   byId('step-note').textContent = last.note || '';
   byId('step-note').hidden = !last.note;
   byId('step-task').textContent = last.task || last.message || '';
   byId('step-task').hidden = !last.task && !!last.note;
-  byId('listen-step').textContent = entry.solved ? '🔊 听总结' : '🔊 听提示';
+  byId('listen-step').textContent = entry.solved && !reviewing ? '🔊 听总结' : '🔊 听提示';
   const format = inputFormats[last.format] || inputFormats.phrase;
   const hasChoices = renderStepChoices(last.choices);
   byId('attempt-label').textContent = hasChoices ? '也可以自己填' : format.title;
   attempt.placeholder = format.placeholder;
   attempt.rows = hasChoices ? 1 : 2;
   attempt.inputMode = last.format === 'number' ? 'decimal' : 'text';
-  const recentAnswer = [...entry.turns].reverse().find((turn) => turn.attempt)?.attempt;
+  const recentAnswer = entry.turns.slice(0, index + 1).reverse().find((turn) => turn.attempt)?.attempt;
   byId('last-answer').hidden = !recentAnswer || entry.solved;
   byId('last-answer-text').textContent = recentAnswer || '';
   attemptForm.hidden = entry.solved || entry.expired;
@@ -371,7 +483,7 @@ function renderTimeline() {
 
 function lessonTurn(reply, answer = '') {
   return {
-    attempt: answer, note: reply.note, task: reply.task, format: reply.format, choices: reply.choices,
+    stage: reply.stage, attempt: answer, note: reply.note, task: reply.task, format: reply.format, choices: reply.choices,
     feedback: reply.feedback, message: reply.message, hintLevel: reply.hintLevel,
   };
 }
@@ -439,6 +551,7 @@ function entryFromReply(reply, prior) {
 }
 
 async function begin(reply, prior) {
+  latestStep();
   entry = entryFromReply(reply, prior);
   clearPhoto();
   confirming = false;
@@ -454,7 +567,7 @@ function addListening(button, passage) {
   button.addEventListener('click', () => voice.read(button, passage()));
 }
 addListening(byId('listen-problem'), () => entry?.problem || '');
-addListening(byId('listen-step'), () => entry?.turns.at(-1).message || '');
+addListening(byId('listen-step'), () => reviewHint?.message || entry?.turns[shownStep()]?.message || '');
 byId('speak-problem').addEventListener('click', (event) => voice.record(event.currentTarget, problem));
 byId('speak-attempt').addEventListener('click', (event) => voice.record(event.currentTarget, attempt));
 
@@ -489,15 +602,43 @@ for (const button of practice) {
   });
 }
 
+function goToStep(direction) {
+  const steps = answerSteps();
+  const index = steps[steps.indexOf(shownStep()) + direction];
+  if (busy || voice.recordingButton || index === undefined) return;
+  reviewHint = undefined;
+  voice.stopReading();
+  if (stepCursor === null) liveDraft = attempt.value;
+  stepCursor = index === entry.turns.length - 1 ? null : index;
+  attempt.value = stepCursor === null ? liveDraft : entry.turns[index + 1]?.attempt || '';
+  report('');
+  renderLesson();
+  updateChoiceSelection();
+}
+
+byId('prev-step').addEventListener('click', () => goToStep(-1));
+byId('forward-step').addEventListener('click', () => goToStep(1));
+
 function turn(action, answer = '') {
   const waiting = action === 'hint' ? '🐠 鱼渔正在找提示…' : '🐠 鱼渔正在想…';
   return waitFor(byId('lesson-status'), waiting, async () => {
     voice.stopReading();
     let reply;
+    let token = entry.token;
+    const index = shownStep();
+    const previous = entry.turns[index];
+    if (reviewHint) token = reviewHint.token;
+    else if (stepCursor !== null) {
+      const later = entry.turns.slice(index + 1);
+      const restored = await request('rewind', { token, checkpoint: previous.resumeToken, task: previous.task,
+        accepted: later.filter(turn => turn.feedback === 'correct_step').length,
+        answers: later.filter(turn => turn.attempt).length });
+      token = restored.token;
+    }
     try {
-      reply = await request(action, { token: entry.token, entryId: entry.id, attempt: answer });
+      reply = await request(action, { token, entryId: entry.id, attempt: answer });
     } catch (error) {
-      if (error.status !== 409) throw error;
+      if (error.status !== 409 || stepCursor !== null) throw error;
       entry.expired = true;
       report('');
       renderLesson();
@@ -506,10 +647,34 @@ function turn(action, answer = '') {
       return;
     }
     report('');
+    if (stepCursor !== null && action === 'hint') {
+      reviewHint = reply;
+      renderLesson();
+      updateChoiceSelection();
+      return;
+    }
     if (answer) attempt.value = '';
+    entry.turns = entry.turns.slice(0, index + 1);
+    if (reviewHint) {
+      entry.turns.push(lessonTurn(reviewHint));
+    }
+    if (action === 'attempt') {
+      const from = entry.turns.at(-1);
+      from.resumeToken = token;
+      if (stepCursor === null) from.stage ??= entry.stage;
+    }
+    latestStep();
     Object.assign(entry, { stage: reply.stage, solved: reply.solved, token: reply.token, updatedAt: Date.now() });
     if (reply.completionToken) entry.completionToken = reply.completionToken;
     saveTurn(reply, action, answer);
+    // Completed lessons only need the readable history. Limit large AI contexts in unfinished journals.
+    let remaining = entry.solved ? 0 : 128_000;
+    for (let i = entry.turns.length - 1; i >= 0; i--) {
+      const turn = entry.turns[i];
+      if (!turn.resumeToken) continue;
+      if (turn.resumeToken.length > remaining) delete turn.resumeToken;
+      else remaining -= turn.resumeToken.length;
+    }
     const award = await persist();
     renderLesson(award);
     if (entry.solved) openView('study', true, true);
@@ -613,6 +778,7 @@ function startPractice(original = entry, near) {
 
 byId('start-practice').addEventListener('click', () => startPractice());
 byId('review-practice').addEventListener('click', () => startPractice());
+byId('visit-shells').addEventListener('click', () => wardrobeUI.showShells());
 byId('jump-leaderboard').addEventListener('click', () => {
   const title = byId('leaderboard-title');
   title.tabIndex = -1;
@@ -643,6 +809,7 @@ async function refreshLeaderboard() {
 }
 
 function nextProblem() {
+  latestStep();
   entry = null;
   reviewingSolution = false;
   messages.replaceChildren();
@@ -669,7 +836,7 @@ function openView(next, focus = true, keepStatus = false) {
     voice.cancelRecord();
   }
   view = next;
-  byId('hero').hidden = start.hidden = next !== 'study' || !!entry;
+  byId('study-desk').hidden = byId('hero').hidden = start.hidden = next !== 'study' || !!entry;
   byId('continue-card').hidden = next !== 'study' || !latestUnfinished || !!entry;
   const completion = next === 'study' && entry?.solved && !reviewingSolution;
   lesson.hidden = next !== 'study' || !entry || completion;
@@ -696,6 +863,7 @@ function openView(next, focus = true, keepStatus = false) {
 for (const item of navigation) item.addEventListener('click', () => openView(item.dataset.view));
 
 function openEntry(item) {
+  latestStep();
   entry = item;
   attempt.value = item.carriedAttempt || '';
   reviewingSolution = Boolean(item.solved);
@@ -1056,9 +1224,10 @@ async function refreshCurrentView(refresh = true) {
     if (!data.family || busy || voice.recordingButton) return;
     const fresh = data.entries.find((item) => item.id === entry?.id);
     if (!fresh || fresh.revision === entry.revision) return;
-    const draft = attempt.value;
+    const draft = stepCursor === null ? attempt.value : liveDraft;
     const justCompleted = !entry.solved && fresh.solved;
     voice.stopReading();
+    latestStep();
     entry = fresh;
     attempt.value = draft || fresh.carriedAttempt || '';
     renderLesson();

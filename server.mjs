@@ -738,7 +738,40 @@ const files = {
   '/mascot.webp': ['mascot.webp', 'image/webp'],
   '/fish-icon.png': ['fish-icon.png', 'image/png'],
 };
-const apiActions = new Set(['start', 'hint', 'attempt', 'challenge', 'activity', 'transcribe', 'dictation', 'speak']);
+// Old journals have readable steps but no checkpoints. Rebuild from progress the tutor verified.
+function rewind(body, familyId) {
+  const current = decode(body.token, familyId);
+  if (body.checkpoint) {
+    let prior;
+    try { prior = unseal(body.checkpoint); }
+    catch { throw fail(409, '这一步的记录已过期，请点下一步继续。'); }
+    if (prior.familyId !== current.familyId || prior.entryId !== current.entryId ||
+        prior.kind || prior.solved || prior.problem !== current.problem) throw fail(409, '请重新打开这道题。');
+    return { token: encode({ ...prior, expires: Date.now() + ttl }) };
+  }
+  const { answers, accepted } = body;
+  if (![answers, accepted].every(n => Number.isInteger(n) && n >= 0 && n <= 250))
+    throw fail(400, '这一步的记录不完整。');
+  const state = { ...current, stepHints: [], hintLevel: 0 };
+  if (current.guide) {
+    const verified = current.guide.accepted;
+    if (accepted > verified.length) throw fail(409, '这一步属于更早的一次练习。');
+    state.guide = { ...current.guide, hintLevel: 0, accepted: verified.slice(0, verified.length - accepted) };
+    const guide = getGuide(current.problem, current.guide.version) || getChallengeGuide(current.problem);
+    const step = guide?.steps[state.guide.accepted.length];
+    const task = typeof step?.task === 'function' ? step.task(state.guide.accepted) : step?.task;
+    if (!task || task !== body.task) throw fail(409, '这一步的题目已更新，请点下一步继续。');
+  } else {
+    state.turns = current.turns.slice(0, Math.max(0, current.turns.length - answers));
+    if (!state.turns.length || state.turns.at(-1).task !== body.task)
+      throw fail(409, '这一步只保留了记录，可以点下一步回到作答。');
+    state.count -= answers;
+    state.stage = state.turns.some(turn => turn.partial) ? 1 : 0;
+  }
+  return { token: encode({ ...state, expires: Date.now() + ttl }) };
+}
+
+const apiActions = new Set(['rewind', 'start', 'hint', 'attempt', 'challenge', 'activity', 'transcribe', 'dictation', 'speak']);
 const json = (res, status, payload) => {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(payload));
@@ -770,6 +803,7 @@ const server = http.createServer(async (req, res) => {
     if (!req.familyId) throw fail(401, '请先登录家庭账号。');
     if (req.headers['sec-fetch-site'] === 'cross-site') throw fail(403, '请从鱼渔页面提交。');
     const body = await readJson(req);
+    if (action === 'rewind') return json(res, 200, rewind(body, req.familyId));
     if (action === 'speak') return await narration(req, res, body);
     if (action === 'dictation') return json(res, 200, await dictation(req, body));
     if (action === 'transcribe') return json(res, 200, await transcribe(req, body));

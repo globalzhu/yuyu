@@ -7,8 +7,8 @@
   <meta name="description" content="鱼渔陪你读懂题目，自己找到下一步。">
   <title>鱼渔 · 一小步，也很棒</title>
   <link rel="icon" href="fish-icon.png">
-  <link rel="stylesheet" href="style.css?v=16">
-  <script type="module" src="app.js?v=16"></script>
+  <link rel="stylesheet" href="style.css?v=17">
+  <script type="module" src="app.js?v=17"></script>
 </head>
 <body>
   <header class="top"><div class="wrap top-inner">
@@ -30,20 +30,21 @@
       <button class="button primary" id="continue-button" type="button">接着做 →</button>
     </section>
 
+    <div id="study-desk" class="study-desk">
     <section class="hero" id="hero" aria-labelledby="hero-title">
       <div class="hero-copy">
         <p class="eyebrow"><span aria-hidden="true">✦</span> 你的解题小伙伴</p>
-        <h1 id="hero-title">卡住了？<br><em>我们一起想。</em></h1>
-        <p class="intro">拍题、说题都可以。<br>鱼渔陪你做下一小步。</p>
+        <h1 id="hero-title">带上题目，<br><em>一起想一想。</em></h1>
+        <p class="intro">鱼渔陪你，一次想一步。</p>
       </div>
       <div class="hero-art" role="img" aria-label="戴着围巾、拿着放大镜的黄色小鱼"></div>
     </section>
 
     <section class="card" id="start" aria-labelledby="start-title">
-      <div class="card-title"><span class="tile peach" aria-hidden="true">✎</span><div><h2 id="start-title" tabindex="-1">带一道题来</h2><p>拍一拍、说一说，也可以打字。</p></div></div>
+      <div class="card-title"><span class="tile peach" aria-hidden="true">✎</span><div><h2 id="start-title" tabindex="-1">带一道题来</h2><p>写下题目，或把照片粘贴到下面。</p></div></div>
       <form id="problem-form">
         <label class="sr" for="problem">把题目打在这里</label>
-        <textarea id="problem" rows="3" maxlength="2400" placeholder="把题目写在这里…"></textarea>
+        <textarea id="problem" rows="3" maxlength="2400" placeholder="写题目，或长按这里粘贴照片…"></textarea>
         <div class="photo-preview" id="photo-preview" hidden><img id="photo-thumb" alt="待发送的题目照片"><span>已添加题目照片</span><button id="remove-photo" type="button" class="quiet">移除</button></div>
         <div class="actions start-actions">
           <div class="photo-actions">
@@ -51,6 +52,7 @@
             <label class="button secondary" for="camera"><span aria-hidden="true">▣</span> 拍照</label>
             <input id="photo" type="file" accept="image/*" class="sr file-input">
             <label class="button secondary" for="photo">选照片</label>
+            <button id="paste-photo" type="button" class="button secondary">粘贴图片</button>
             <button id="speak-problem" type="button" class="button secondary mic-button" aria-pressed="false"><span aria-hidden="true">🎙</span> 说题</button>
           </div>
           <button id="start-button" class="button primary" type="submit">和鱼渔想一想 →</button>
@@ -65,6 +67,8 @@
       </div>
     </section>
 
+    </div>
+
     <section class="card lesson" id="lesson" aria-labelledby="lesson-title" hidden>
       <div class="lesson-top"><div class="card-title"><span class="tile mint" aria-hidden="true">🐠</span><div><h2 id="lesson-title" tabindex="-1">一起解题</h2><p id="lesson-subtitle"></p></div></div><div class="lesson-actions"><button id="review-practice" type="button" class="button secondary" hidden>同类三题闯关</button><button id="review-challenge" type="button" class="button secondary" hidden>挑战相似题</button><button id="new-problem" type="button" class="quiet">换一道题</button></div></div>
       <div class="lesson-grid">
@@ -73,6 +77,11 @@
           <div class="problem-card"><div class="row-heading"><strong>这道题</strong><button type="button" class="listen" id="listen-problem">🔊 听题目</button></div><p id="problem-view"></p></div>
         </div>
         <div class="lesson-work">
+          <nav id="step-nav" class="step-nav" aria-label="切换作答步骤" hidden>
+            <button id="prev-step" type="button" class="button secondary">← 上一步</button>
+            <span id="step-position" aria-live="polite"></span>
+            <button id="forward-step" type="button" class="quiet" hidden>下一步 →</button>
+          </nav>
           <div id="current-step" class="current-step" aria-live="polite" aria-atomic="true">
             <div class="row-heading"><strong id="step-title">现在做这一步</strong><button type="button" class="listen" id="listen-step">🔊 听提示</button></div>
             <p id="step-note"></p>
@@ -141,15 +150,15 @@
 
     <section id="reef" aria-labelledby="reef-title" hidden>
       <div class="reef-banner">
-        <div><h2 id="reef-title" tabindex="-1">我的贝壳岛</h2><p id="wallet-source">做题攒的贝壳，可以换喜欢的装扮。</p><button id="jump-leaderboard" type="button" class="button secondary">看看学习榜 ↓</button></div>
+        <div><h2 id="reef-title" tabindex="-1">我的贝壳岛</h2><p id="wallet-source">做题攒的贝壳，可以换喜欢的装扮。</p><div class="island-links"><button type="button" id="visit-shells" class="button secondary">🐚 贝壳收藏册</button><a class="button secondary" href="#gifts">🎁 礼物铺</a><button id="jump-leaderboard" type="button" class="button secondary">学习榜 ↓</button></div></div>
         <div class="reef-art" aria-hidden="true"><span>✧</span>🐚<span>✦</span></div>
       </div>
-      <section class="card gift-shop">
+      <div id="wardrobe"></div>
+      <section id="gifts" class="card gift-shop">
         <div class="row-heading"><h3>贝壳礼物铺</h3><span aria-hidden="true">🎁</span></div>
         <div id="gift-list"></div><details id="gift-records"><summary>我的兑换和赠送记录</summary><div id="gift-history"></div></details>
         <p id="gift-status" role="status"></p>
       </section>
-      <div id="wardrobe"></div>
       <div class="card reef-details">
         <div class="row-heading"><h3>海洋伙伴图鉴</h3><span id="reef-count" class="shells"></span></div>
         <p id="reef-progress-label"></p>

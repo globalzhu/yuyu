@@ -46,6 +46,8 @@ function normalizeTurn(turn) {
     task: validateText(turn.task, 300, ''),
     message: validateText(turn.message, 600, ''),
   };
+  if ([0, 1, 2].includes(turn.stage)) value.stage = turn.stage;
+  if (turn.resumeToken) value.resumeToken = validateText(turn.resumeToken, 34_000);
   if (formats.has(turn.format)) value.format = turn.format;
   if (feedbackTypes.has(turn.feedback)) value.feedback = turn.feedback;
   if (Number.isSafeInteger(turn.hintLevel) && turn.hintLevel >= 0) value.hintLevel = turn.hintLevel;

@@ -2,10 +2,17 @@ export const WARDROBE_SLOTS = [
   { id: 'hat', name: '帽子', icon: '🧢' },
   { id: 'glasses', name: '眼镜', icon: '👓' },
   { id: 'neck', name: '领饰', icon: '🎀' },
+  { id: 'shell', name: '贝壳', icon: '🐚' },
   { id: 'scene', name: '背景', icon: '🫧' },
 ];
 
 export const WARDROBE_ITEMS = [
+  { id: 'peachfan', slot: 'shell', name: '蜜桃扇贝', price: 1 },
+  { id: 'mintspiral', slot: 'shell', name: '薄荷海螺', price: 3 },
+  { id: 'moonpearl', slot: 'shell', name: '月光珍珠贝', price: 5 },
+  { id: 'rainbow', slot: 'shell', name: '彩虹扇贝', price: 8 },
+  { id: 'sorcerer', slot: 'hat', name: '星夜魔法帽', price: 6 },
+  { id: 'aurora', slot: 'scene', name: '极光浅海', price: 7 },
   { id: 'sunhat', slot: 'hat', name: '海边草帽', price: 2 },
   { id: 'captain', slot: 'hat', name: '小船长帽', price: 5 },
   { id: 'crown', slot: 'hat', name: '星星王冠', price: 8 },

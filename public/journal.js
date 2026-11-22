@@ -1,4 +1,4 @@
-import { normalizeWardrobe } from './wardrobe-catalog.mjs?v=1';
+import { normalizeWardrobe } from './wardrobe-catalog.mjs?v=2';
 import { memberFetch } from './member-fetch.js';
 const database = new Promise((resolve) => {
   if (!globalThis.indexedDB) return resolve(null);

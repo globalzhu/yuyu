@@ -1,4 +1,4 @@
-import { fishAvatar } from './wardrobe.js?v=2';
+import { fishAvatar } from './wardrobe.js?v=3';
 
 function element(tag, className, content) {
   const value = document.createElement(tag);

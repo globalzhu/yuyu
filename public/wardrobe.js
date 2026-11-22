@@ -1,4 +1,4 @@
-import { WARDROBE_ITEMS, WARDROBE_SLOTS, emptyWardrobe, normalizeWardrobe } from './wardrobe-catalog.mjs';
+import { WARDROBE_ITEMS, WARDROBE_SLOTS, emptyWardrobe, normalizeWardrobe } from './wardrobe-catalog.mjs?v=2';
 
 const byId = (id) => document.getElementById(id);
 
@@ -35,7 +35,7 @@ function drawOutfit(avatar, outfit) {
   const names = [];
   const layers = avatar.querySelector('.wardrobe-layers');
   layers.replaceChildren();
-  for (const slot of ['neck', 'glasses', 'hat']) {
+  for (const slot of ['neck', 'glasses', 'hat', 'shell']) {
     const item = WARDROBE_ITEMS.find((value) => value.id === outfit[slot]);
     if (item) { layers.append(gear(item)); names.push(item.name); }
   }
@@ -69,6 +69,8 @@ export function createWardrobe({ purchase, equip, report }) {
   const grid = element('div', 'wardrobe-grid');
   grid.id = 'wardrobe-items';
   grid.setAttribute('role', 'tabpanel');
+  const collection = element('p', 'shell-collection');
+  collection.setAttribute('aria-live', 'polite');
   const itemDetail = element('div', 'wardrobe-detail');
   const itemTitle = element('h4');
   const itemDescription = element('p');
@@ -76,7 +78,7 @@ export function createWardrobe({ purchase, equip, report }) {
   action.id = 'wardrobe-action';
   action.type = 'button';
   itemDetail.append(itemTitle, itemDescription, action);
-  shop.append(tabs, grid, itemDetail);
+  shop.append(tabs, collection, grid, itemDetail);
 
   const preview = element('div', 'wardrobe-preview');
   const avatar = fishAvatar();
@@ -186,6 +188,12 @@ export function createWardrobe({ purchase, equip, report }) {
       tab.tabIndex = selected ? 0 : -1;
       tab.disabled = disabled;
     }
+    collection.hidden = category !== 'shell';
+    if (!collection.hidden) {
+      const badges = WARDROBE_ITEMS.filter(item => item.slot === 'shell');
+      const count = badges.filter(item => wardrobe.owned.includes(item.id)).length;
+      collection.textContent = '贝壳收藏册 · ' + count + ' / ' + badges.length + (count === badges.length ? '　全部集齐啦！' : '　选一枚给小鱼别上');
+    }
     grid.setAttribute('aria-labelledby', `wardrobe-tab-${category}`);
     grid.replaceChildren();
     for (const item of WARDROBE_ITEMS.filter((value) => value.slot === category)) {
@@ -230,6 +238,13 @@ export function createWardrobe({ purchase, equip, report }) {
   }
 
   return {
+    showShells() {
+      category = 'shell';
+      selection = undefined;
+      draw();
+      byId('wardrobe-tab-shell').focus({ preventScroll: true });
+      panel.scrollIntoView({ block: 'start' });
+    },
     render(snapshot) {
       state = { ...state, ...snapshot, wardrobe: normalizeWardrobe(snapshot.wardrobe) };
       externalBusy = snapshot.busy === true;
