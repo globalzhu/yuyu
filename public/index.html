@@ -7,8 +7,8 @@
   <meta name="description" content="鱼渔陪你读懂题目，自己找到下一步。">
   <title>鱼渔 · 一小步，也很棒</title>
   <link rel="icon" href="fish-icon.png">
-  <link rel="stylesheet" href="style.css?v=14">
-  <script type="module" src="app.js?v=14"></script>
+  <link rel="stylesheet" href="style.css?v=15">
+  <script type="module" src="app.js?v=15"></script>
 </head>
 <body>
   <header class="top"><div class="wrap top-inner">
@@ -141,7 +141,7 @@
 
     <section id="reef" aria-labelledby="reef-title" hidden>
       <div class="reef-banner">
-        <div><h2 id="reef-title" tabindex="-1">我的贝壳岛</h2><p>给小鱼换个新造型。<br>做题攒的贝壳，可以换喜欢的装扮。</p><button id="jump-leaderboard" type="button" class="button secondary">看看学习榜 ↓</button></div>
+        <div><h2 id="reef-title" tabindex="-1">我的贝壳岛</h2><p id="wallet-source">做题攒的贝壳，可以换喜欢的装扮。</p><button id="jump-leaderboard" type="button" class="button secondary">看看学习榜 ↓</button></div>
         <div class="reef-art" aria-hidden="true"><span>✧</span>🐚<span>✦</span></div>
       </div>
       <div id="wardrobe"></div>
@@ -195,6 +195,13 @@
       <button id="forgot-password" type="button" class="account-text">忘记密码？</button>
     </div>
     <div id="family-signed-in" hidden>
+      <div class="account-row"><span><b>学习榜昵称</b><small id="public-nickname"></small></span><button id="edit-nickname" type="button" class="account-action">修改昵称</button></div>
+      <form id="nickname-form" class="account-form account-subpanel" hidden>
+        <label for="nickname">给小鱼取个小名</label>
+        <input id="nickname" required autocomplete="off" maxlength="32" aria-describedby="nickname-help">
+        <p id="nickname-help">1–16 个字，会和小鱼头像一起展示在学习榜上。请用小名。</p>
+        <div class="dialog-actions"><button id="cancel-nickname" type="button" class="account-text">取消</button><button class="button primary">保存昵称</button></div>
+      </form>
       <div id="family-import-area" class="notice" hidden><p>这台设备上还有访客的学习记录。</p><button type="button" id="family-import" class="button secondary">加入这个账号</button></div>
       <div class="account-row"><span><b>学习记录</b><small>题目本、贝壳和装扮</small></span><button type="button" id="family-refresh" class="account-action">同步一下</button></div>
       <div class="account-row"><span><b>登录密码</b><small>由家长管理</small></span><button type="button" id="open-password" class="account-action">修改密码</button></div>

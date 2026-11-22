@@ -1,3 +1,5 @@
+import { fishAvatar } from './wardrobe.js?v=2';
+
 function element(tag, className, content) {
   const value = document.createElement(tag);
   if (className) value.className = className;
@@ -108,8 +110,13 @@ export function createLeaderboard({ refresh, report }) {
   function row(entry) {
     const result = element('div', 'leaderboard-row' + (entry.isYou ? ' is-you' : ''));
     const rank = Number.isSafeInteger(entry.rank) && entry.rank > 0 ? String(entry.rank) : '—';
-    result.append(element('span', 'leaderboard-rank', rank),
-      element('span', 'leaderboard-name', (entry.displayName || '海洋小伙伴') + (entry.isYou ? ' · 你们家' : '')),
+    const identity = element('div', 'rank-identity');
+    const portrait = element('span', 'rank-portrait');
+    portrait.append(fishAvatar(entry.equipped || {}));
+    const name = element('span', 'leaderboard-name', entry.displayName || '海洋小伙伴');
+    if (entry.isYou) name.append(element('small', 'rank-me', '我'));
+    identity.append(portrait, name);
+    result.append(element('span', 'leaderboard-rank', rank), identity,
       element('strong', 'leaderboard-score', `${Math.max(0, Number(entry.solvedCount) || 0)} 题`));
     return result;
   }

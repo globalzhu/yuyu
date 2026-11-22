@@ -9,6 +9,7 @@ WorkingDirectory=/opt/yuyu/current
 Environment=PORT=3731
 Environment=YUYU_COOKIE_PATH=/yuyu/
 EnvironmentFile=/etc/yuyu/model.env
+EnvironmentFile=-/etc/yuyu/admin.env
 ExecStart=/opt/yuyu/runtime/node /opt/yuyu/current/server.mjs
 DynamicUser=yes
 NoNewPrivileges=yes

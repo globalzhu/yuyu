@@ -1,0 +1,20 @@
+:root { color-scheme:light; font-family:"Atkinson Hyperlegible Next","PingFang SC",system-ui,sans-serif; color:#173d35; background:#f3f6ef; }
+* { box-sizing:border-box; } body { margin:0; } [hidden] { display:none!important; }
+header,.heading,.brand,.actions { display:flex; align-items:center; gap:12px; }
+header { border-bottom:1px solid #d8e3d7; background:#fffefa; padding:14px max(5%,calc((100vw - 1040px)/2)); justify-content:space-between; }
+.brand { font-size:22px; font-weight:800; white-space:nowrap; } .brand img { width:40px; } .brand span { font-size:15px; font-weight:600; color:#587367; }
+a { color:#166a54; } main { margin:32px auto; width:min(1040px,90%); }
+h1 { font-size:clamp(24px,4vw,36px); margin:9px 0; } h2 { margin:0; font-size:21px; } .heading { justify-content:space-between; }
+button,input { font:inherit; min-height:42px; border-radius:10px; border:1px solid #cddbd0; padding:8px 12px; }
+button { cursor:pointer; background:#edf4ec; color:#175742; font-weight:650; }
+button:hover { background:#dcebdc; } button.primary { background:#125e49; color:white; }
+input { background:#fff; width:100%; } label { display:block; font-weight:600; margin:16px 0 5px; }
+.login,.panel,dialog,.stats article { background:#fffefa; border:1px solid #d8e3d7; border-radius:18px; padding:24px; }
+.login { max-width:390px; margin:9vh auto 0; } .login img { width:60px; } .login button { width:100%; margin-top:22px; }
+.stats { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin:20px 0; }
+.stats article { color:#546a5c; } .stats strong { display:block; margin-top:4px; color:#175742; font-size:30px; }
+.family { display:grid; grid-template-columns:1fr auto; gap:10px; align-items:center; padding:18px 0; border-bottom:1px solid #dfebdf; }
+.profile { overflow-wrap:anywhere; } .profile small { display:block; color:#577163; margin-top:4px; } .flag { display:inline-block; font-size:12px; background:#edf1e5; padding:2px 6px; border-radius:6px; margin-left:8px; }
+.actions { flex-wrap:wrap; gap:6px; } .family .actions { grid-column:1/-1; } .score { font-size:14px; } dialog { color:inherit; width:min(400px,90%); }
+dialog::backdrop { background:#153b3159; } #status { color:#7a492f; }
+@media(max-width:600px) { main { width:94%; margin:18px auto; } .stats { gap:5px; } .stats article { font-size:12px; padding:12px; } .stats strong { font-size:22px; } .panel { padding:15px; } .family { grid-template-columns:1fr; } }

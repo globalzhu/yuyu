@@ -1,0 +1,20 @@
+<!doctype html><html lang="zh-CN"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>鱼渔 · 管理后台</title><link rel="icon" href="fish-icon.png">
+<link rel="stylesheet" href="admin.css?v=1"><script type="module" src="admin.js?v=1"></script>
+</head><body>
+<header><div class="brand"><img src="fish-icon.png" alt="">鱼渔 <span>管理后台</span></div><a href="./">返回鱼渔 ↗</a></header>
+<main>
+<section id="access" class="login" hidden><img src="fish-icon.png" alt=""><h1>管理员登录</h1>
+<form id="login"><label for="username">管理员账号</label><input id="username" autocomplete="username" required>
+<label for="password">密码</label><input id="password" type="password" autocomplete="current-password" required maxlength="128">
+<button class="primary">登录后台</button></form></section>
+<section id="dashboard" hidden>
+<div class="heading"><h1>运营概览</h1><button id="logout">退出后台</button></div>
+<div class="stats"><article>家庭账号<strong id="families-count">—</strong></article><article>累计解开题目<strong id="solved-count">—</strong></article><article>学习榜展示家庭<strong id="visible-count">—</strong></article></div>
+<div class="panel"><div class="heading"><h2>家庭账号管理</h2><button id="refresh">刷新</button></div>
+<label for="search">查找家庭</label><input id="search" type="search" placeholder="输入家庭账号或小鱼昵称">
+<div id="list"></div></div></section>
+<p role="status" id="status"></p>
+</main><dialog id="confirm"><form method="dialog"><h2 id="confirm-title"></h2><p id="confirm-detail"></p><div class="actions"><button value="cancel" autofocus>取消</button><button class="primary" value="yes">确认操作</button></div></form></dialog>
+</body></html>

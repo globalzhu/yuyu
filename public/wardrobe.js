@@ -16,6 +16,32 @@ function gear(item) {
   return node;
 }
 
+export function fishAvatar(outfit = {}) {
+  const avatar = element('div', 'wardrobe-avatar');
+  avatar.setAttribute('role', 'img');
+  const base = element('img', 'wardrobe-fish');
+  base.src = 'avatar-fish.png';
+  base.alt = '';
+  const layers = element('div', 'wardrobe-layers');
+  const water = element('div', 'wardrobe-water');
+  water.setAttribute('aria-hidden', 'true');
+  avatar.append(water, base, layers);
+  drawOutfit(avatar, outfit);
+  return avatar;
+}
+
+function drawOutfit(avatar, outfit) {
+  avatar.dataset.scene = outfit.scene || 'sea';
+  const names = [];
+  const layers = avatar.querySelector('.wardrobe-layers');
+  layers.replaceChildren();
+  for (const slot of ['neck', 'glasses', 'hat']) {
+    const item = WARDROBE_ITEMS.find((value) => value.id === outfit[slot]);
+    if (item) { layers.append(gear(item)); names.push(item.name); }
+  }
+  avatar.setAttribute('aria-label', `小鱼${names.length ? '，穿着' + names.join('、') : '，初始造型'}`);
+}
+
 export function createWardrobe({ purchase, equip, report }) {
   const mount = byId('wardrobe');
   let state = { shells: 0, earnedShells: 0, wardrobe: emptyWardrobe() };
@@ -53,16 +79,8 @@ export function createWardrobe({ purchase, equip, report }) {
   shop.append(tabs, grid, itemDetail);
 
   const preview = element('div', 'wardrobe-preview');
-  const avatar = element('div', 'wardrobe-avatar');
+  const avatar = fishAvatar();
   avatar.id = 'wardrobe-avatar';
-  avatar.setAttribute('role', 'img');
-  const base = element('img', 'wardrobe-fish');
-  base.src = 'avatar-fish.png';
-  base.alt = '';
-  const layers = element('div', 'wardrobe-layers');
-  const water = element('div', 'wardrobe-water');
-  water.setAttribute('aria-hidden', 'true');
-  avatar.append(water, base, layers);
   const caption = element('p', 'wardrobe-preview-caption');
   const reset = element('button', 'quiet wardrobe-reset', '结束试穿');
   reset.type = 'button';
@@ -192,14 +210,7 @@ export function createWardrobe({ purchase, equip, report }) {
     const selected = WARDROBE_ITEMS.find((item) => item.id === selection);
     const outfit = { ...wardrobe.equipped };
     if (selected) outfit[selected.slot] = selected.id;
-    avatar.dataset.scene = outfit.scene || 'sea';
-    const names = [];
-    layers.replaceChildren();
-    for (const slot of ['neck', 'glasses', 'hat']) {
-      const item = WARDROBE_ITEMS.find((value) => value.id === outfit[slot]);
-      if (item) { layers.append(gear(item)); names.push(item.name); }
-    }
-    avatar.setAttribute('aria-label', `你的小鱼${names.length ? '，穿着' + names.join('、') : '，初始造型'}`);
+    drawOutfit(avatar, outfit);
     caption.textContent = selected ? `正在试穿 · ${selected.name}` : '你的小鱼伙伴';
     reset.hidden = !selected;
     reset.disabled = disabled;

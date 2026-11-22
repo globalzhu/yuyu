@@ -1,3 +1,4 @@
+import { createAdmin } from './admin.mjs';
 import http from 'node:http';
 import { createCipheriv, createDecipheriv, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -15,6 +16,7 @@ const stateKey = modelKey ? createHmac('sha256', modelKey).update('yuyu-study-st
 const ttl = 30 * 86400_000;
 const audioApi = new URL('/api/v1/services/aigc/multimodal-generation/generation', base);
 const family = createFamilyHandler({ directory: process.env.STATE_DIRECTORY || process.env.YUYU_STATE_DIRECTORY, verifyCompletion });
+const admin = createAdmin(family);
 const limit = 4 * 1024 * 1024;
 const rate = new Map();
 const day = { time: 0, count: 0 };
@@ -720,6 +722,9 @@ async function readJson(req) {
 
 const files = {
   '/': ['index.html', 'text/html; charset=utf-8'],
+  '/admin': ['admin.html', 'text/html; charset=utf-8'],
+  '/admin.js': ['admin.js', 'text/javascript; charset=utf-8'],
+  '/admin.css': ['admin.css', 'text/css; charset=utf-8'],
   '/style.css': ['style.css', 'text/css; charset=utf-8'],
   '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
   '/voice.js': ['voice.js', 'text/javascript; charset=utf-8'],
@@ -747,12 +752,13 @@ const server = http.createServer(async (req, res) => {
     if ((req.method === 'GET' || req.method === 'HEAD') && Object.hasOwn(files, path)) {
       const [name, contentType] = files[path];
       const content = await readFile(new URL('./public/' + name, import.meta.url));
-      res.writeHead(200, { 'Content-Type': contentType, 'Content-Length': content.length, 'Cache-Control': path === '/' ? 'no-cache' : 'public, max-age=3600' });
+      res.writeHead(200, { 'Content-Type': contentType, 'Content-Length': content.length, 'Cache-Control': path === '/' || path === '/admin' ? 'no-cache' : 'public, max-age=3600' });
       return res.end(req.method === 'HEAD' ? undefined : content);
     }
     if (req.method === 'GET' && path === '/api/health') return json(res, 200, { status: 'ok' });
     if (req.method === 'GET' && path === '/api/leaderboard') return json(res, 200, await family.leaderboard(req));
     const action = path.startsWith('/api/') ? path.slice(5) : '';
+    if (action.startsWith('admin/')) return await admin(req, res, action.slice(6), readJson, json);
     if (action.startsWith('family/')) return await family(req, res, action.slice(7), readJson, json);
     if (req.method !== 'POST' || !apiActions.has(action)) return json(res, 404, { error: '这条小路还没开放。' });
     if (req.headers['sec-fetch-site'] === 'cross-site') throw fail(403, '请从鱼渔页面提交。');

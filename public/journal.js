@@ -219,7 +219,7 @@ let syncTask = Promise.resolve();
 
 async function familyRequest(action, body) {
   const headers = {};
-  if (family && ['journal', 'sync', 'logout', 'purchase', 'equip', 'password', 'recovery-code'].includes(action)) headers['X-Yuyu-Family-Name'] = family.name;
+  if (family && ['journal', 'sync', 'logout', 'purchase', 'equip', 'nickname', 'password', 'recovery-code'].includes(action)) headers['X-Yuyu-Family-Name'] = family.name;
   if (body !== undefined) Object.assign(headers, { 'Content-Type': 'application/json', 'X-Yuyu-Family': '1' });
   const response = await fetch('api/family/' + action, {
     cache: 'no-store',
@@ -397,6 +397,15 @@ export async function verifyFamilySession() {
     else if (family) family = result.family;
     else syncState = 'local';
     return changed;
+  });
+}
+
+export async function saveNickname(nickname) {
+  await ready;
+  return serialize(async () => {
+    const result = await familyRequest('nickname', { nickname });
+    family = result.family;
+    return family;
   });
 }
 

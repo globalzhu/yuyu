@@ -275,6 +275,14 @@ function importDevice(journal, migration, now, touched, verifyCompletion) {
   return true;
 }
 
+function publicNickname(family, id) {
+  return family.nickname || '珊瑚小鱼·' + id.slice(0, 6).toUpperCase();
+}
+
+function sessionProfile(family, id) {
+  return { name: family.name, nickname: publicNickname(family, id), hasRecovery: Boolean(family.recoveryHash) };
+}
+
 function setCookie(res, token, secure, cookiePath) {
   const maxAge = token ? Math.floor(sessionAge / 1000) : 0;
   const attributes = `Path=${cookiePath}; HttpOnly; SameSite=Strict`;
@@ -351,6 +359,7 @@ export function createFamilyHandler({
       }
       await rename(temporary, file);
       leaderboardVersion++;
+      leaderboardTask = undefined;
       leaderboardCache = undefined;
     } finally {
       await unlink(temporary).catch(() => {});
@@ -424,13 +433,13 @@ export function createFamilyHandler({
       const secret = newSession(family);
       await write(id, family);
       if (action === 'register') familyCount++;
-      return { secret, hasRecovery: Boolean(family.recoveryHash) };
+      return { secret, profile: sessionProfile(family, id) };
     }
-    const { secret, hasRecovery } = action === 'register'
+    const { secret, profile } = action === 'register'
       ? await lock('register', () => lock(id, openSession))
       : await lock(id, openSession);
     setCookie(res, id + '.' + secret, secureCookies, cookiePath);
-    return json(res, 200, { family: { name, hasRecovery } });
+    return json(res, 200, { family: profile });
   }
 
   async function replacePassword(id, family, password, res, json, recovering) {
@@ -442,7 +451,7 @@ export function createFamilyHandler({
     const secret = newSession(family);
     await write(id, family);
     setCookie(res, id + '.' + secret, secureCookies, cookiePath);
-    return json(res, 200, { family: { name: family.name } });
+    return json(res, 200, { family: sessionProfile(family, id) });
   }
 
   async function recover(req, body, res, json) {
@@ -551,7 +560,7 @@ export function createFamilyHandler({
 
   async function handleFamily(req, res, action, readJson, json) {
     const isRead = req.method === 'GET' && (action === 'session' || action === 'journal');
-    const isWrite = req.method === 'POST' && ['register', 'login', 'logout', 'sync', 'purchase', 'equip', 'password', 'recovery-code', 'recover'].includes(action);
+    const isWrite = req.method === 'POST' && ['register', 'login', 'logout', 'sync', 'purchase', 'equip', 'password', 'recovery-code', 'recover', 'nickname'].includes(action);
     if (!isRead && !isWrite) throw failure(404, '找不到这个家庭账号操作。');
     if (isWrite && (req.headers['x-yuyu-family'] !== '1' || req.headers['sec-fetch-site'] === 'cross-site' ||
         req.headers['sec-fetch-site'] === 'same-site')) {
@@ -575,7 +584,7 @@ export function createFamilyHandler({
     return await lock(id, async () => {
       const family = await read(id);
       const signedIn = Number(family?.sessions[sessionHash]) > Date.now();
-      if (action === 'session') return json(res, 200, { family: signedIn ? { name: family.name, hasRecovery: Boolean(family.recoveryHash) } : null });
+      if (action === 'session') return json(res, 200, { family: signedIn ? sessionProfile(family, id) : null });
       if (signedIn && req.headers['x-yuyu-family-name'] !== family.name) {
         throw failure(401, '当前浏览器切换了家庭账号，请重新登录。');
       }
@@ -590,6 +599,16 @@ export function createFamilyHandler({
       if (!signedIn) throw failure(401, '请先登录你的家庭账号。');
       if (action === 'password' || action === 'recovery-code') return managePassword(action, id, family, body, res, json);
       checkLimit('journal:' + id, 180, 60_000);
+      if (action === 'nickname') {
+        const nickname = typeof body.nickname === 'string' ? body.nickname.normalize('NFKC').trim() : '';
+        if (!/^[\p{L}\p{N} ·_-]{1,16}$/u.test(nickname) || !/[\p{L}\p{N}]/u.test(nickname)) {
+          throw failure(400, '昵称请用 1–16 个字，可用中英文、数字、空格、间隔点、下划线和短横线。');
+        }
+        if (nickname.toLowerCase() === family.name) throw failure(400, '给学习榜另取一个小名吧，家庭登录名由你自己保管。');
+        family.nickname = nickname;
+        await write(id, family);
+        return json(res, 200, { family: sessionProfile(family, id) });
+      }
       if (action === 'journal') return json(res, 200, snapshot(family.journal));
       if (action === 'purchase') return await purchase(id, family, body, res, json);
       if (action === 'equip') return await equip(id, family, body, res, json);
@@ -622,8 +641,8 @@ export function createFamilyHandler({
       for (const filename of files) {
         const id = filename.slice(0, -5);
         const family = await read(id);
-        if (!family?.journal?.awards) continue;
-        entries.push({ id, solvedCount: Object.keys(family.journal.awards).length });
+        if (!family?.journal?.awards || family.hideFromLeaderboard) continue;
+        entries.push({ id, displayName: publicNickname(family, id), equipped: normalizeWardrobe(family.journal.wardrobe).equipped, solvedCount: Object.keys(family.journal.awards).length });
       }
       entries.sort((a, b) => b.solvedCount - a.solvedCount || a.id.localeCompare(b.id));
       return { entries, updatedAt: Date.now() };
@@ -651,7 +670,8 @@ export function createFamilyHandler({
     const leaderboard = await loadLeaderboard();
     const display = (entry, index) => ({
       rank: index + 1,
-      displayName: '珊瑚小鱼·' + entry.id.slice(0, 6).toUpperCase(),
+      displayName: entry.displayName,
+      equipped: entry.equipped,
       solvedCount: entry.solvedCount,
       isYou: entry.id === currentId,
     });
@@ -661,6 +681,34 @@ export function createFamilyHandler({
       you: ownIndex < 0 ? null : display(leaderboard.entries[ownIndex], ownIndex),
       updatedAt: leaderboard.updatedAt,
     };
+  });
+
+  // These methods are only exposed through the authenticated admin router.
+  handle.adminList = () => withCapacity(async () => {
+    if (!directory) throw failure(503, '账号服务暂不可用。');
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    const rows = [];
+    for (const filename of (await readdir(directory)).filter((value) => /^[a-f0-9]{64}\.json$/.test(value))) {
+      const id = filename.slice(0, -5);
+      const family = await read(id);
+      const { shells, solvedCount } = snapshot(family.journal);
+      rows.push({ name: family.name, nickname: publicNickname(family, id), customNickname: Boolean(family.nickname),
+        hidden: Boolean(family.hideFromLeaderboard), shells, solvedCount });
+    }
+    return rows.sort((a, b) => b.solvedCount - a.solvedCount || a.name.localeCompare(b.name));
+  });
+  handle.adminModerate = (body) => withCapacity(async () => {
+    if (!namePattern.test(body.name || '') || !['hide', 'show', 'reset-nickname', 'revoke-sessions'].includes(body.operation)) throw failure(400, '请选择账号和管理操作。');
+    const id = sha256(body.name);
+    await lock(id, async () => {
+      const family = await read(id);
+      if (!family) throw failure(404, '找不到这个家庭账号。');
+      if (body.operation === 'reset-nickname') delete family.nickname;
+      else if (body.operation === 'revoke-sessions') family.sessions = {};
+      else family.hideFromLeaderboard = body.operation === 'hide';
+      await write(id, family);
+    });
+    return { ok: true };
   });
 
   handle.completedOriginal = async (req, parentId) => {

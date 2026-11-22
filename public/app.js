@@ -1,9 +1,9 @@
-import { equipItem, verifyFamilySession, managePassword, familyInfo, importLocalJournal, loadJournal, purchaseItem, removeEntries, saveEntry, signIn, signOut } from './journal.js?v=9';
+import { equipItem, verifyFamilySession, saveNickname, managePassword, familyInfo, importLocalJournal, loadJournal, purchaseItem, removeEntries, saveEntry, signIn, signOut } from './journal.js?v=10';
 import { createVoice } from './voice.js?v=5';
 import { createPhotoCropper } from './crop.js?v=1';
-import { createWardrobe } from './wardrobe.js?v=1';
+import { createWardrobe } from './wardrobe.js?v=2';
 import { emptyWardrobe } from './wardrobe-catalog.mjs?v=1';
-import { createLeaderboard, createPractice } from './practice.js?v=1';
+import { createLeaderboard, createPractice } from './practice.js?v=2';
 
 const byId = (id) => document.getElementById(id);
 const problem = byId('problem');
@@ -50,6 +50,7 @@ let photoLoading = false;
 let confirming = false;
 let shells = 0;
 let earnedShells = 0;
+let walletOwner = '这台设备的访客';
 let currentWardrobe = emptyWardrobe();
 let activeActivity;
 let historyFilter = 'all';
@@ -79,11 +80,13 @@ const wardrobeUI = createWardrobe({
     const data = await purchaseItem(itemId);
     updateEconomy(data);
     renderReef();
+    if (familyName) refreshLeaderboard();
     return data;
   },
   async equip(slot, itemId) {
     const data = await equipItem(slot, itemId);
     updateEconomy(data);
+    if (familyName) refreshLeaderboard();
     return data;
   },
   report,
@@ -809,6 +812,7 @@ byId('delete-history').addEventListener('close', async (event) => {
 });
 
 function renderReef() {
+  byId('wallet-source').textContent = walletOwner + '累计获得 ' + earnedShells + ' 枚贝壳，兑换装扮用了 ' + (earnedShells - shells) + ' 枚。';
   byId('reef-count').textContent = '累计获得 ' + earnedShells + ' 枚';
   const next = rewardLevels.find((level) => level.goal > earnedShells);
   byId('reef-progress-label').textContent = next
@@ -834,6 +838,7 @@ async function refreshReef() {
   try {
     const data = await loadJournal();
     updateEconomy(data);
+    walletOwner = data.family ? '家庭账号 ' + data.family.name : '这台设备的访客';
   } catch {}
   renderReef();
   refreshLeaderboard();
@@ -865,6 +870,8 @@ function selectFamilyMode(mode) {
 }
 
 function closeSecurity() {
+  byId('nickname-form').hidden = true;
+  byId('nickname-form').reset();
   byId('security-form').reset();
   byId('security-form').hidden = byId('issued-code').hidden = true;
   byId('code-value').textContent = '';
@@ -874,7 +881,7 @@ async function renderFamily() {
   const { family, syncState, canImport } = await familyInfo();
   familyName = family?.name || '';
   const signedIn = Boolean(family && syncState !== 'expired');
-  const label = signedIn ? familyName : syncState === 'unknown' ? '身份待确认' : '访客';
+  const label = syncState === 'expired' ? '请重新登录' : signedIn ? familyName : syncState === 'unknown' ? '身份待确认' : '访客';
   byId('family-nav-text').textContent = label;
   byId('family-open').setAttribute('aria-label', '用户中心，' + label);
   byId('family-open').title = '用户中心 · ' + label;
@@ -885,7 +892,8 @@ async function renderFamily() {
   byId('family-import-area').hidden = !canImport;
   byId('family-sync-status').textContent = signedIn
     ? (syncState === 'synced' ? '题目、贝壳和装扮已同步' : '等待联网同步')
-    : syncState === 'unknown' ? '联网后打开用户中心，再确认一次身份。' : '学习记录保存在这台设备上';
+    : syncState === 'expired' ? '请登录以继续同步家庭贝壳。' : syncState === 'unknown' ? '联网后打开用户中心，再确认一次身份。' : '访客的贝壳和题目保存在当前浏览器。';
+  byId('public-nickname').textContent = family?.nickname || '';
   byId('recovery-state').textContent = family?.hasRecovery ? '已设置，由家长保管' : '尚未设置，忘记密码时可用';
   byId('open-code').textContent = family?.hasRecovery ? '更换找回码' : '设置找回码';
   if (syncState === 'expired') {
@@ -960,6 +968,24 @@ byId('family-form').addEventListener('submit', (event) => {
     return '已登录。';
   });
 });
+byId('edit-nickname').addEventListener('click', () => {
+  closeSecurity();
+  byId('nickname-form').hidden = false;
+  byId('nickname').value = byId('public-nickname').textContent;
+  byId('nickname').focus();
+  byId('nickname').select();
+});
+byId('cancel-nickname').addEventListener('click', closeSecurity);
+byId('nickname-form').addEventListener('submit', event => {
+  event.preventDefault();
+  withFamilyAction(async () => {
+    await saveNickname(byId('nickname').value);
+    closeSecurity();
+    if (view === 'reef') await refreshLeaderboard();
+    return '昵称已保存，学习榜也更新了。';
+  });
+});
+
 function openSecurity(action) {
   closeSecurity();
   const changing = action === 'password';
